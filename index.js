@@ -50,12 +50,10 @@ const startConnection = async () => {
 
     nvdia.ev.on('messages.upsert', async (msgUpdate) => {
         const messages = msgUpdate.messages;
-        if (!messages || messages.length === 0) return;
-
         const msg = messages[0];
+        if (!messages || messages.length === 0) return;
         if (!msg.message) return;
         if (msg.key && msg.key.remoteJid === 'status@broadcast') return;
-        if (msg.key.fromMe) return;
         
         // module.exports.handleIncomingMessage = case.js
         handleIncomingMessage(nvdia, msg);

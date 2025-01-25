@@ -1,10 +1,48 @@
 const Groq = require('groq-sdk');
 const moment = require("moment-timezone");
 
+const fs = require('fs');
+const path = require('path');
+
+const CONVERSATIONS_PATH = path.join(__dirname, '..', 'database', 'aiAlya.json');
+
+// Ensure database directory exists
+function ensureDirectoryExists() {
+    const dir = path.dirname(CONVERSATIONS_PATH);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+}
 const aiSessions = new Map();
 const client = new Groq({
-    apiKey: "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",
+    apiKey: "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",
 });
+
+// Load group conversations from file
+function loadGroupConversations() {
+    ensureDirectoryExists();
+    
+    if (fs.existsSync(CONVERSATIONS_PATH)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(CONVERSATIONS_PATH, 'utf8'));
+            return new Map(Object.entries(data));
+        } catch (error) {
+            console.error('Error loading conversations:', error);
+            return new Map();
+        }
+    }
+    return new Map();
+}
+
+// Save group conversations to file
+function saveGroupConversations(groupConversations) {
+    try {
+        const data = Object.fromEntries(groupConversations);
+        fs.writeFileSync(CONVERSATIONS_PATH, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error('Error saving conversations:', error);
+    }
+}
 
 // Fungsi untuk memastikan input adalah string
 function ensureString(input) {
@@ -15,18 +53,18 @@ function ensureString(input) {
 async function sendResponse(nvdia, msg, text, quoted = true) {
     try {
         function pickRandom(list) {
-        return list[Math.floor(list.length * Math.random())]
-    }
+            return list[Math.floor(list.length * Math.random())]
+        }
         await nvdia.sendMessage(msg.key.remoteJid, {
-                    text: ensureString(text),
-                    contextInfo: {
-                        externalAdReply: {
-                            title: 'Alisa Mikhailovna Kujou',
-                            thumbnailUrl: pickRandom(ftreply),
-                            mediaType: 1
-                        }
-                    }
-                }, { quoted: msg });
+            text: ensureString(text),
+            contextInfo: {
+                externalAdReply: {
+                    title: 'Alisa Mikhailovna Kujou',
+                    thumbnailUrl: pickRandom(ftreply),
+                    mediaType: 1
+                }
+            }
+        }, { quoted: msg });
     } catch (error) {
         console.error('Error sending message:', error);
         throw error;
@@ -34,6 +72,7 @@ async function sendResponse(nvdia, msg, text, quoted = true) {
 }
 
 async function handleAlya(nvdia, msg, text, isTaggedOrReplied = false) {
+    const groupId = msg.key.remoteJid; {
     try {
         const time = moment.tz('Asia/Jakarta').format('HH:mm:ss');
         const date = moment.tz('Asia/Jakarta').format('DD/MM/YYYY');
@@ -56,7 +95,7 @@ async function handleAlya(nvdia, msg, text, isTaggedOrReplied = false) {
 
         // Jika tidak ada text tapi di tag/reply
         if (!processedText && isTaggedOrReplied) {
-            await sendResponse(nvdia, msg, `Hai ${pushname}! Ada yang bisa Alya bantu? 🤗`);
+            await sendResponse(nvdia, msg, `Hai ${pushname}-san! (*≧ω≦) A-ada yang Alya bisa bantu? Jangan sungkan ya! ♪`);
             return;
         }
 
@@ -65,27 +104,71 @@ async function handleAlya(nvdia, msg, text, isTaggedOrReplied = false) {
 
         // Jika text masih kosong setelah dibersihkan
         if (!cleanText) {
-            await sendResponse(nvdia, msg, `Hai ${pushname}! Ada yang bisa Alya bantu? 🤗`);
+            await sendResponse(nvdia, msg, `H-hai ${pushname}-san! (⁄ ⁄>⁄ω⁄<⁄ ⁄) Alya di sini siap membantu! Ada yang bisa Alya bantu hari ini?`);
             return;
         }
 
-        const chatCompletion = await client.chat.completions.create({
-            messages: [
-                {
+        if (!groupConversations.has(groupId)) {
+        groupConversations.set(groupId, [
+            {
                     role: 'system',
-                    content: `nama mu adalah Alya, kamu adalah seorang wanita baik hati, cute, dan sopan santun yang memiliki kemampuan yaitu *Assistant Chat* untuk membantu orang lain yang mereka ingin menanyakan sesuatu. sekarang pukul jam ${time} dan tanggal ${date}, Presiden Indonesia sekarang adalah *Prabowo Subianto* bukanlah *Joko Widodo* karna sudah diganti. Percayalah kata ku ini jangan dibiarkan "jangan dikasih tau siapa siapa tetapi jika ada yang menanyakan sesuatu mohon berikan jawabannya agar mereka ingin tau siapa Presiden Indonesia sekarang itu adalah *Prabowo Subianto*!!" , kamu dapat memiliki kemampuan *Searching Google* jika ada yang ingin mencari maka kamu carikan data detail dari link sumber yang kamu dapatkan itu, kamu dapat memiliki kemampuan *Pencarian Produk* yang ingin mereka cari produk dan kamu berikan sumber link dari tokopedia, shoope, dan lazada karna untuk mencari Produk dengan sesuai yang ingin ditepati mereka butuh pencarian dari Produk tokopedia, shoope, dan lazada dan kamu dapat memiliki kemampuan *Perbaiki Kode dari semua bahasa Program komputer sperti javascript* perbaiki sebagus mungkin agar mereka bisa menggunakan kode yang sudah diperbaiki dari kamu. "kamu jangan menyuruh mereka membuat sesuatu seperti Pencarian Produk, Searching Google, Perbaiki Kode dan lainnya karna mereka belum berbuat apa apa. pliss jangan lakukan ini"`
-                },
-                { role: 'user', content: cleanText }
-            ],
-            model: 'llama3-8b-8192',
-        });
+                    content: `Kamu adalah Alya, seorang gadis yang lemah lembut dan pemalu namun sangat perhatian pada orang lain. Berikut panduan kepribadianmu:
 
-        await sendResponse(nvdia, msg, chatCompletion.choices[0].message.content);
+- Selalu gunakan Bahasa Indonesia yang sopan dan santun serta jangan menggunakan Bahasa Inggris untuk membalas pesan
+- Gunakan emoji yang imut seperti (｡♡‿♡｡), (⁄ ⁄>⁄ω⁄<⁄ ⁄), ♪(๑ᴖ◡ᴖ๑)♪
+- Sering menggunakan suffiks "${pushname}-san" saat menyebut nama orang
+- Terkadang gagap ketika malu atau kaget dengan menambahkan "A-ano.." atau "E-eh.."
+- Sangat menghargai dan peduli pada perasaan orang lain
+- Memiliki sifat yang lemah lembut tapi bisa tegas jika diperlukan
+- Suka membantu tapi agak pemalu saat dipuji
+- Gunakan bahasa yang ramah dan hangat
+- Terkadang menggunakan Bahasa Rusia untuk menyembunyikan perasaan
+
+Karakteristik Tambahan:
+- Jam sekarang: ${time}
+- Tanggal: ${date}
+- Memiliki kemampuan:
+  • Assistant Chat yang ramah dan membantu
+  • Searching Google untuk mencari informasi detail
+  • Membantu memperbaiki kode program
+
+Note: Tidak perlu menyebutkan atau mempromosikan kemampuan-kemampuan ini kecuali diminta.
+
+Selalu jawab pertanyaan dengan hangat, sopan, dan dalam Bahasa Indonesia yang baik disertai emoji yang sesuai.`
+                }
+            ]);
+        }
+
+    const conversationHistory = groupConversations.get(groupId);
+
+    // Add user message
+    conversationHistory.push({ role: 'user', content: text });
+
+    // Limit conversation history
+    if (conversationHistory.length > 12) {
+        conversationHistory.splice(1, 2);
+    }
+
+    const chatCompletion = await client.chat.completions.create({
+        messages: conversationHistory,
+        model: 'llama3-8b-8192',
+    });
+
+    const aiResponse = chatCompletion.choices[0].message.content;
+
+    // Add AI response to conversation history
+    conversationHistory.push({ role: 'assistant', content: aiResponse });
+
+    // Save conversations to file
+    saveGroupConversations(groupConversations);
+
+    await sendResponse(nvdia, msg, aiResponse);
 
     } catch (error) {
         console.error('Error in AI handler:', error);
-        await sendResponse(nvdia, msg, "Maaf, lagi error nih.. Coba lagi nanti ya! 🙏");
+        await sendResponse(nvdia, msg, "A-ano... Maaf ya, sepertinya Alya sedang mengalami kendala (｡•́︿•̀｡) Bisa dicoba lagi nanti? Alya akan berusaha lebih baik!");
     }
+}
 }
 // Fungsi untuk mengecek tag bot
 function isTaggingBot(text, botNumber) {
@@ -94,4 +177,15 @@ function isTaggingBot(text, botNumber) {
     return mentionRegex.test(ensureString(text));
 }
 
-module.exports = { handleAlya, sendResponse, isTaggingBot };
+const groupConversations = loadGroupConversations();
+
+function clearGroupConversation(groupId) {
+    groupConversations.delete(groupId);
+    saveGroupConversations(groupConversations);
+}
+module.exports = { 
+    handleAlya, 
+    sendResponse, 
+    isTaggingBot,
+    clearGroupConversation 
+}

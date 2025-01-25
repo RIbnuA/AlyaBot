@@ -17,9 +17,10 @@ const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const stream = require('stream');
 const pipeline = promisify(stream.pipeline);
+const aiGroupStatus = new Map();
 const { execSync } = require('child_process');
 const handleAIPrivate = require('./handlers/aiPrivateHandler');
-const { handleAlya, sendResponse, isTaggingBot } = require('./handlers/aiAlya');
+const { handleAlya, isTaggingBot, clearGroupConversation } = require('./handlers/aiAlya');
 const handleAI = require('./handlers/aiClaude');
 const { handleSimiSettings, handleSimiChat } = require('./handlers/aiSimi');
 const { handleBlackboxChat } = require('./handlers/aiBlackbox');
@@ -63,15 +64,17 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
 
     // Console message
     console.log(
-            chalk.green(`[${new Date().toLocaleTimeString()}]`) + 
-            chalk.blue(` Pesan diterima dari `) + chalk.bold(sender) + 
-            chalk.yellow(`: "${messageContent}"`) + 
-            chalk.magenta(` (Type: ${messageType})`) +
-            chalk.cyan(` [Reply: ${isReplyToBot}, Mention: ${hasMention}]`)
-        );
+    chalk.green(`[${new Date().toLocaleTimeString()}]`) + 
+    chalk.blue(` Pesan diterima dari `) + 
+    chalk.bold(msg.key.participant || sender) +
+    chalk.white(` | From Bot: ${msg.key.fromMe ? 'YES' : 'NO'}`) + 
+    chalk.yellow(` "${messageContent}"`) + 
+    chalk.magenta(` (Type: ${messageType})`) +
+    chalk.cyan(` [Reply: ${isReplyToBot}, Mention: ${hasMention}]`)
+);
 
     // Multi-prefix
-    const prefixes = ['!', '.', ''];
+    const prefixes = ['!', '.', '/'];
         const prefixUsed = prefixes.find(p => messageContent.startsWith(p)) || '';
         const command = messageContent.slice(prefixUsed.length).split(' ')[0].toLowerCase();
         const args = messageContent
@@ -89,17 +92,24 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
     
     // Handle tag/reply ke bot
         if (hasMention || isReplyToBot) {
-            console.log('Bot sedang ditag atau direply!!');
-            await handleAlya(nvdia, msg, messageContent, true);
-            return;
-        }
+    if (isGroup && (!aiGroupStatus.has(msg.key.remoteJid) || aiGroupStatus.get(msg.key.remoteJid) !== false)) {
+        if (msg.key.fromMe) return;
+        console.log('Bot sedang ditag atau direply!!');
+        await handleAlya(nvdia, msg, messageContent, true);
+        return;
+    }
+}
 
         // Handle command alya/ai
         if (['alya'].includes(command)) {
-            console.log('Command alya terdeteksi...');
-            await handleAlya(nvdia, msg, args.join(' '));
-            return;
-        }
+    if (isGroup) {
+        console.log('Command alya terdeteksi...');
+        await handleAlya(nvdia, msg, args.join(' '));
+    } else {
+        await nvdia.sendMessage(sender, { text: 'AI commands only work in groups' });
+    }
+    return;
+}
 
         // Handle private chat tanpa prefix
         if (!msg.key.fromMe && !isGroup && !prefixUsed) {
@@ -108,12 +118,27 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
             return;
         }
 
-        if (isTagged || isReplied) {
-            await handleAlya(nvdia, msg, messageContent, true);
-            return;
-        }
+
   
     switch (command) {
+case 'alyaon':
+    if (isGroup && sender === global.owner + '@s.whatsapp.net') {
+        aiGroupStatus.set(msg.key.remoteJid, true);
+        await reply(nvdia, msg, 'AI responses are now ON in this group. Conversation session started.');
+    } else {
+        await reply(nvdia, msg, 'Only bot owner can use this command.');
+    }
+    break;
+
+case 'alyaoff':
+    if (isGroup && sender === global.owner + '@s.whatsapp.net') {
+        aiGroupStatus.set(msg.key.remoteJid, false);
+        clearGroupConversation(msg.key.remoteJid);
+        await reply(nvdia, msg, 'AI responses are now OFF in this group. Conversation session cleared.');
+    } else {
+        await reply(nvdia, msg, 'Only bot owner can use this command.');
+    }
+    break;
 case 'stiker':
 case 'sticker':
 case 's':

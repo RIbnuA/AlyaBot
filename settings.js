@@ -7,5 +7,5 @@ global.ftreply = [
 "https://files.catbox.moe/bt7abl.jpg",
 "https://files.catbox.moe/qvh006.jpg"
 ]
-global.isCreator = '6281391620354'
+global.owner = '6281391620354'
 global.nomorbot = '6288228768785@s.whatsapp.net'
