@@ -1,21 +1,23 @@
 require('./settings');
+const { makeWASocket, makeCacheableSignalKeyStore, downloadMediaMessage, downloadContentFromMessage, emitGroupParticipantsUpdate, emitGroupUpdate, generateWAMessageContent, generateWAMessage, makeInMemoryStore, prepareWAMessageMedia, generateWAMessageFromContent, MediaType, areJidsSameUser, WAMessageStatus, downloadAndSaveMediaMessage, AuthenticationState, GroupMetadata, initInMemoryKeyStore, getContentType, MiscMessageGenerationOptions, useSingleFileAuthState, BufferJSON, WAMessageProto, MessageOptions, WAFlag, WANode, WAMetric, ChatModification, MessageTypeProto, WALocationMessage, ReconnectMode, WAContextInfo, proto, WAGroupMetadata, ProxyAgent, waChatKey, MimetypeMap, MediaPathMap, WAContactMessage, WAContactsArrayMessage, WAGroupInviteMessage, WATextMessage, WAMessageContent, WAMessage, BaileysError, WA_MESSAGE_STATUS_TYPE, MediaConnInfo, URL_REGEX, WAUrlInfo, WA_DEFAULT_EPHEMERAL, WAMediaUpload, mentionedJid, processTime, Browser, MessageType, Presence, WA_MESSAGE_STUB_TYPES, Mimetype, relayWAMessage, Browsers, GroupSettingChange, DisconnectReason, WASocket, getStream, WAProto, isBaileys, PHONENUMBER_MCC, AnyMessageContent, useMultiFileAuthState, fetchLatestBaileysVersion, templateMessage, InteractiveMessage, Header } = require('@whiskeysockets/baileys');
 const { exec } = require('child_process');
 const systeminformation = require('systeminformation');
 const os = require('os');
 const chalk = require('chalk');
 const fs = require('fs');
 const moment = require('moment-timezone');
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
 const sharp = require('sharp');
 const path = require('path');
-const { Sticker } = require('wa-sticker-formatter');
 const yts = require("yt-search");
 const axios = require("axios");
 const ytdl = require('ytdl-core');
-const ffmpeg = require('fluent-ffmpeg');
 const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const stream = require('stream');
+const { addExif } = require('./App/function/exif')
+const { smsg, formatDate, getTime, getGroupAdmins, formatp, await, sleep, runtime, clockString, msToDate, sort, toNumber, enumGetKey, fetchJson, getBuffer, json, delay, format, logic, generateProfilePicture, parseMention, getRandom, fetchBuffer, buffergif, GIFBufferToVideoBuffer, totalcase } = require('./App/function/myfunc'); 
+const { bytesToSize, checkBandwidth, formatSize, jsonformat, nganuin, shorturl, color } = require("./App/function/funcc");
+const { toAudio, toPTT, toVideo, ffmpeg, addExifAvatar } = require('./App/function/converter')
 const pipeline = promisify(stream.pipeline);
 const aiGroupStatus = new Map();
 const { execSync } = require('child_process');
@@ -35,13 +37,21 @@ const { handleTest } = require('./handlers/toolsEval');
 
 moment.locale('id');
 
-module.exports.handleIncomingMessage = async (nvdia, msg) => {
+module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
     try {
+       const fatkuns = m && (m.quoted || m);
+const quoted = (fatkuns?.mtype == 'buttonsMessage') ? fatkuns[Object.keys(fatkuns)[1]] :
+(fatkuns?.mtype == 'templateMessage') ? fatkuns.hydratedTemplate[Object.keys(fatkuns.hydratedTemplate)[1]] :
+(fatkuns?.mtype == 'product') ? fatkuns[Object.keys(fatkuns)[0]] :
+m.quoted || m;
+const mime = ((quoted?.msg || quoted) || {}).mimetype || '';
+const qmsg = (quoted?.msg || quoted);
        const timezone = 'Asia/Jakarta';
        const jam = moment().tz(timezone).format('dddd DD-MM-YYYY HH:mm:ss');
        const contactName = msg.pushName || 'Unknown';
        const sender = msg.key.remoteJid;
        const isGroup = sender.endsWith('@g.us');
+       const pushname = msg.pushName || 'User';
         
         // Ekstrak message type dan content
         const messageType = Object.keys(msg.message || {})[0];
@@ -65,6 +75,7 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
     // Console message
     console.log(
     chalk.green(`[${new Date().toLocaleTimeString()}]`) + 
+    chalk.blue(` Group: `) + chalk.bold(msg.key.remoteJid.includes('@g.us') ? msg.key.remoteJid : 'Private Chat') +
     chalk.blue(` Pesan diterima dari `) + 
     chalk.bold(msg.key.participant || sender) +
     chalk.white(` | From Bot: ${msg.key.fromMe ? 'YES' : 'NO'}`) + 
@@ -74,18 +85,17 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
 );
 
     // Multi-prefix
-    const prefixes = ['!', '.', '/'];
+const prefixes = ['!', '.', ''];
         const prefixUsed = prefixes.find(p => messageContent.startsWith(p)) || '';
         const command = messageContent.slice(prefixUsed.length).split(' ')[0].toLowerCase();
         const args = messageContent
     .slice((prefixUsed + command).length)
     .trim()
     .split(/\s+/);
-    
         // Cek tag dan reply
         const isTagged = isTaggingBot(messageContent, global.nomorbot);
         const isReplied = msg.message?.extendedTextMessage?.contextInfo?.participant === global.nomorbot;
-        
+
     function pickRandom(list) {
         return list[Math.floor(list.length * Math.random())]
     }
@@ -121,6 +131,31 @@ module.exports.handleIncomingMessage = async (nvdia, msg) => {
 
   
     switch (command) {
+case 'sticker':
+case 'stiker':
+case 's': {
+    if (!quoted) return nvdia.sendMessage(sender, { text:`Balas Video/Image Dengan Caption ${prefixes + command}`}, { quoted: msg });
+
+    if (/image/.test(mime)) {
+        let media = await quoted.download();
+        let encmedia = await nvdia.sendImageAsSticker(m.chat, media, m, {
+            packname: global.packname,
+            author: global.author
+        });
+        await fs.unlinkSync(encmedia);
+    } else if (/video/.test(mime)) {
+        if ((quoted.msg || quoted).seconds > 11) return m.reply('Maksimal 10 detik!');
+        let media = await quoted.download();
+        let encmedia = await nvdia.sendVideoAsSticker(m.chat, media, m, {
+            packname: global.packname,
+            author: global.author
+        });
+        await fs.unlinkSync(encmedia);
+    } else {
+        return nvdia.sendMessage(sender, { text:`Kirim Gambar/Video Dengan Caption ${prefixes + command}\nDurasi Video 1-9 Detik`}, {quoted: msg});
+    }
+}
+break;
 case 'alyaon':
     if (isGroup && sender === global.owner + '@s.whatsapp.net') {
         aiGroupStatus.set(msg.key.remoteJid, true);
@@ -139,79 +174,6 @@ case 'alyaoff':
         await reply(nvdia, msg, 'Only bot owner can use this command.');
     }
     break;
-case 'stiker':
-case 'sticker':
-case 's':
-case 'tikel':
-    // Cek apakah pesan memiliki media (gambar, video, atau GIF)
-    if (
-        msg.message?.imageMessage || 
-        msg.message?.videoMessage || 
-        msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage ||
-        msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage
-    ) {
-        try {
-            // Tentukan apakah itu gambar atau video
-            const isImage = msg.message?.imageMessage || 
-                            msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
-            const isVideo = msg.message?.videoMessage || 
-                            msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.videoMessage;
-
-            // Download media
-            const buffer = await downloadMediaMessage(
-                isImage ? (msg.message.imageMessage ? msg : await msg.getQuotedMessage()) :
-                (msg.message.videoMessage ? msg : await msg.getQuotedMessage()), 
-                'buffer',
-                {}
-            );
-
-            // Buat sticker menggunakan wa-sticker-formatter
-            const sticker = new Sticker(buffer, {
-                pack: 'Sticker', // Nama pack sticker
-                author: `Dibuat pada-${jam}`, // Nama author
-                type: 'full', // Full sticker
-                categories: ['??', '??'], // Kategori sticker
-                quality: 50, // Kualitas sticker
-                id: `sticker_${Date.now()}`, // Unique ID
-                background: 'transparent' // Background transparan
-            });
-
-            // Jika ini adalah video, set config tambahan
-            if (isVideo) {
-                sticker.setFps(10); // Set FPS untuk video/GIF
-                sticker.setLoop(true); // Set loop untuk video/GIF
-            }
-
-            // Convert ke buffer
-            const stickerBuffer = await sticker.toBuffer();
-
-            // Kirim sticker
-            await nvdia.sendMessage(msg.key.remoteJid, {
-                sticker: stickerBuffer,
-                contextInfo: {
-                    externalAdReply: {
-                    showAdAttribution: true,
-                        title: 'Sticker',
-                        body: `${jam}`,
-                        thumbnailUrl: pickRandom(ftreply),
-                        mediaType: 1
-                    }
-                }
-            }, { quoted: msg });
-
-        } catch (mediaError) {
-            console.error('Sticker creation error:', mediaError);
-            await nvdia.sendMessage(sender, { 
-                text: 'Gagal membuat stiker, pastikan media valid dan tidak terlalu besar.' 
-            }, { quoted: msg });
-        }
-    } else {
-        await nvdia.sendMessage(sender, { 
-            text: 'Kirim gambar/video dengan caption .stiker atau reply gambar/video dengan .stiker' 
-        }, { quoted: msg });
-    }
-    break;
-    
         case 'halo':
         let halo = 'Halo apa kabar??'
         nvdia.sendMessage(sender, { text: halo}, { quoted: msg });
@@ -319,257 +281,29 @@ CPU: ${cpuInfo.manufacturer} ${cpuInfo.brand} - ${cpuInfo.speed}GHz
                   }, { quoted: msg });
     });
     break;
-            
 case 'brat': {
-    if (!args.length) {
-        nvdia.sendMessage(sender, { text: `Penggunaan: ${prefixUsed + command} <teks>`}, { quoted: msg });
+    let text;
+
+    if (args.length >= 1) {
+        text = args.slice(0).join(" ");
+    } else if (m.quoted && m.quoted.text) {
+        text = m.quoted.text;
+    } else {
+        await nvdia.sendMessage(sender, { text: "Input teks atau reply teks yang ingin dijadikan brat!"}, { quoted: msg });
         return;
     }
 
-    try {
-        const { createCanvas, registerFont } = require('canvas');
-        const Jimp = require('jimp');
-        
-        registerFont('./lib/font/arialnarrow.ttf', { family: 'ArialNarrow' });
-
-        const canvas = createCanvas(512, 512);
-        const ctx = canvas.getContext('2d');
-
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const findOptimalFontSize = (text, maxWidth, maxHeight) => {
-            let fontSize = 100;
-            ctx.font = `bold ${fontSize}px ArialNarrow`;
-            const words = text.split(' ');
-            let lines = [];
-
-            while (fontSize > 0) {
-                lines = [];
-                let currentLine = [];
-                let currentWidth = 0;
-                ctx.font = `bold ${fontSize}px ArialNarrow`;
-
-                for (const word of words) {
-                    const wordWidth = ctx.measureText(word + ' ').width;
-                    if (currentWidth + wordWidth <= maxWidth) {
-                        currentLine.push(word);
-                        currentWidth += wordWidth;
-                    } else {
-                        if (currentLine.length > 0) {
-                            lines.push(currentLine);
-                        }
-                        currentLine = [word];
-                        currentWidth = wordWidth;
-                    }
-                }
-                if (currentLine.length > 0) {
-                    lines.push(currentLine);
-                }
-
-                const totalHeight = lines.length * (fontSize + 10);
-                if (totalHeight <= maxHeight) {
-                    break;
-                }
-                fontSize -= 2;
-            }
-            return { fontSize, lines };
-        };
-
-        const padding = 40;
-        const maxWidth = canvas.width - (padding * 2);
-        const maxHeight = canvas.height - (padding * 2);
-        const text = args.join(' ');
-        const { fontSize, lines } = findOptimalFontSize(text, maxWidth, maxHeight);
-
-        ctx.fillStyle = '#000000';
-        ctx.font = `bold ${fontSize}px ArialNarrow`;
-        
-        const lineHeight = fontSize + 10;
-        const totalHeight = lines.length * lineHeight;
-        const startY = (canvas.height - totalHeight) / 2 + fontSize / 2;
-
-        lines.forEach((line, i) => {
-            if (line.length === 1) {
-                ctx.textAlign = 'left';
-                ctx.fillText(line.join(' '), padding, startY + (i * lineHeight));
-            } else {
-                const totalSpacing = maxWidth - line.reduce((acc, word) => acc + ctx.measureText(word).width, 0);
-                const spaceBetween = line.length > 1 ? totalSpacing / (line.length - 1) : 0;
-                
-                let currentX = padding;
-                line.forEach((word, j) => {
-                    ctx.fillText(word, currentX, startY + (i * lineHeight));
-                    currentX += ctx.measureText(word).width + spaceBetween;
-                });
-            }
-        });
-        
-        const buffer = canvas.toBuffer();
-        let image = await Jimp.read(buffer);
-        image.blur(2);
-        
-        // Convert Jimp image to buffer
-        const imageBuffer = await image.getBufferAsync(Jimp.MIME_PNG);
-        
-        // Create sticker using wa-sticker-formatter
-        const sticker = new Sticker(imageBuffer, {
-            pack: 'Sticker', // Nama pack sticker
-            author: `Dibuat pada-${jam}`, // Nama author
-            type: 'full', // Full sticker
-            categories: ['??', '??'], // Kategori sticker
-            quality: 50 // Kualitas sticker
-        });
-        
-        // Convert to buffer
-        const stickerBuffer = await sticker.toBuffer();
-        
-        // Kirim sticker
-        await nvdia.sendMessage(msg.key.remoteJid, {
-                sticker: stickerBuffer,
-                  ptt: true,
-                    contextInfo: {
-                    externalAdReply: {
-                    showAdAttribution: true,
-                        title: 'Brat sticker',
-                        body: `${jam}`,
-                        thumbnailUrl: pickRandom(ftreply),
-                        mediaType: 1
-                    }
-                }
-            }, { quoted: msg });
-
-    } catch (e) {
-        console.error('Error in brat command:', e);
-        await reply(nvdia, msg, `Terjadi kesalahan saat membuat stiker: ${e.message}`);
-    }
-}
-break;
-case 'bratvideo': {
-    const text = args.join(' ');
-    if (!text) return reply(nvdia, msg, `Contoh: ${prefixUsed + command} hai`);
-    if (text.length > 250) return reply(nvdia, msg, `Karakter terbatas, max 250!`);
-
-    const words = text.split(" ");
-    const tempDir = path.join(process.cwd(), 'lib');
-    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
-    const framePaths = [];
-
-    try {
-        for (let i = 0; i < words.length; i++) {
-            const currentText = words.slice(0, i + 1).join(" ");
-
-            const res = await axios.get(
-                `https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(currentText)}`,
-                { responseType: "arraybuffer" }
-            );
-
-            const framePath = path.join(tempDir, `frame${i}.mp4`);
-            fs.writeFileSync(framePath, res.data);
-            framePaths.push(framePath);
-        }
-
-        const fileListPath = path.join(tempDir, "filelist.txt");
-        let fileListContent = "";
-
-        for (let i = 0; i < framePaths.length; i++) {
-            fileListContent += `file '${framePaths[i]}'\n`;
-            fileListContent += `duration 0.7\n`;
-        }
-
-        fileListContent += `file '${framePaths[framePaths.length - 1]}'\n`;
-        fileListContent += `duration 2\n`;
-
-        fs.writeFileSync(fileListPath, fileListContent);
-        const outputVideoPath = path.join(tempDir, "output.mp4");
-        execSync(
-            `ffmpeg -y -f concat -safe 0 -i ${fileListPath} -vf "fps=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p ${outputVideoPath}`
-        );
-
-        await nvdia.sendMessage(msg.key.remoteJid, {
-            video: { url: outputVideoPath },
-            caption: 'Brat Video Result',
-            contextInfo: {
-                externalAdReply: {
-                showAdAttribution: true,
-                    title: 'Brat Video',
-                    body: `${jam}`,
-                    thumbnailUrl: pickRandom(ftreply),
-                    mediaType: 1,
-                    renderLargerThumbnail: true
-                }
-            }
-        }, { quoted: msg });
-
-        // Cleanup
-        framePaths.forEach((frame) => {
-            if (fs.existsSync(frame)) fs.unlinkSync(frame);
-        });
-        if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
-        if (fs.existsSync(outputVideoPath)) fs.unlinkSync(outputVideoPath);
-    } catch (error) {
-        console.error('Brat Video Error:', error);
-        reply(nvdia, msg, 'Terjadi kesalahan');
-    }
-}
-break;
-case 'bratgen': {
-    const text = args.length >= 1 ? args.join(" ") : (
-        msg.message?.extendedTextMessage?.text || 
-        msg.message?.imageMessage?.caption || 
-        null
-    );
-    
     if (!text) {
-        nvdia.sendMessage(sender, { text: `Penggunaan: ${prefixUsed + command} <teks>`}, { quoted: msg });
-        return;
+        return nvdia.sendMessage(sender, { text:`Penggunaan: ${prefixes + command} <teks>`}, { quoted: msg });
     }
 
-    try {
-        const response = await axios.get("https://brat.caliphdev.com/api/brat", {
-            params: { text },
-            responseType: "arraybuffer"
-        });
-
-        const imageBuffer = Buffer.from(response.data);
-        
-        if (imageBuffer.length <= 10240) {
-            throw new Error("Failed to generate brat image");
-        }
-
-        // Create sticker using wa-sticker-formatter
-        const sticker = new Sticker(imageBuffer, {
-            pack: 'Sticker',
-            author: `Dibuat pada-${jam}`,
-            type: 'full',
-            categories: ['??', '??'],
-            quality: 50
-        });
-        
-        // Convert to buffer
-        const stickerBuffer = await sticker.toBuffer();
-        
-        // Send sticker with external ad reply
-        await nvdia.sendMessage(msg.key.remoteJid, {
-            sticker: stickerBuffer,
-            ptt: true,
-            contextInfo: {
-                externalAdReply: {
-                    showAdAttribution: true,
-                    title: 'Bratgen sticker',
-                    body: `${jam}`,
-                    thumbnailUrl: pickRandom(ftreply),
-                    mediaType: 1
-                }
-            }
-        }, { quoted: msg });
-
-    } catch (e) {
-        console.error('Error in brat command:', e);
-        await reply(nvdia, msg, `Terjadi kesalahan saat membuat stiker: ${e.message}`);
-    }
+    let ngawiStik = await getBuffer(`https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(text)}`);
+    await nvdia.sendImageAsSticker(m.chat, ngawiStik, m, {
+        packname: `Sticker by ${pushname}`,
+        author: `Dibuat pada\n${jam}`
+    });
 }
-break;
+break;            
 
 case 'play': {
     if (!args.length) {
