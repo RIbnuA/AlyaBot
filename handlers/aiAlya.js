@@ -16,6 +16,8 @@ function ensureDirectoryExists() {
 const client = new Groq({
     apiKey: "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",
 });
+const time = moment.tz('Asia/Jakarta').format('HH:mm:ss');
+const date = moment.tz('Asia/Jakarta').format('DD/MM/YYYY');
 
 // Struktur data sesi yang lebih baik
 class ConversationSession {
@@ -38,6 +40,8 @@ class ConversationSession {
 - Terkadang menggunakan Bahasa Rusia untuk menyembunyikan perasaan
 
 Karakteristik Tambahan:
+- Jam sekarang: ${time}
+- Tanggal: ${date}
 - Memiliki kemampuan:
   • Assistant Chat yang ramah dan membantu
   • Searching Google untuk mencari informasi detail
