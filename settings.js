@@ -1,11 +1,3 @@
-async function handleSettings(nvdia, msg){
-const moment = require("moment-timezone");
-const pushname = msg.pushName || 'User';
-const jam = moment().tz(timezone).format('dddd DD-MM-YYYY HH:mm:ss');
-
-global.packname = `Sticker by ${pushname}`
-global.author = `Dibuat pada\n ${jam}`
-}
 global.ftreply = [
 "https://files.catbox.moe/2f2imr.jpeg",
 "https://files.catbox.moe/qgc6m4.jpeg",

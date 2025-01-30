@@ -12,7 +12,7 @@ const yts = require("yt-search");
 const axios = require("axios");
 const ytdl = require('ytdl-core');
 const { createWriteStream } = require('fs');
-const { promisify } = require('util');
+const { promisify, util } = require('util');
 const stream = require('stream');
 const { addExif } = require('./App/function/exif')
 const { smsg, formatDate, getTime, getGroupAdmins, formatp, await, sleep, runtime, clockString, msToDate, sort, toNumber, enumGetKey, fetchJson, getBuffer, json, delay, format, logic, generateProfilePicture, parseMention, getRandom, fetchBuffer, buffergif, GIFBufferToVideoBuffer, totalcase } = require('./App/function/myfunc'); 
@@ -29,31 +29,76 @@ const { handleBlackboxChat } = require('./handlers/aiBlackbox');
 const { handleCharAI, handleCharList, chatbot } = require('./handlers/aiCharAi');
 const handleDownload = require('./handlers/dlAll');
 const { handleTtsave } = require('./handlers/dlTtsave');
+const handlePxpic = require('./handlers/dlPxpic');
 const { handleIgram } = require('./handlers/dlIgram');
-const { handlePinterest } = require('./handlers/dlPinterest');
-const { handlePinApi, handleNext, handleStop } = require('./handlers/dlPinApi');
-const { handleFacebook } = require('./handlers/dlFesnuk');
+const handlePin = require('./handlers/dlPin');
+const { handleFacebookDownload } = require('./handlers/dlFesnuk');
 const { handleTest } = require('./handlers/toolsEval');
 
 moment.locale('id');
 
+function formatMessage(text, mentions = []) {
+    // Ganti semua placeholder mention dengan format yang benar
+    mentions.forEach(jid => {
+        const mentionFormat = `@${jid.replace(/@.+/, '')}`;
+        // Ganti semua instance dari nomor tersebut dengan format mention
+        text = text.replace(new RegExp(jid.replace(/@.+/, ''), 'g'), mentionFormat.slice(1));
+    });
+    return text;
+}
+async function sendMessageWithMentions(nvdia, msg, text, additionalMentions = []) {
+    if (msg.key && msg.key.remoteJid) {
+        // Gabungkan mentions dari sender dan mentions tambahan
+        const mentionedJid = [
+            msg.sender || msg.key.participant || msg.key.remoteJid,
+            ...additionalMentions
+        ].filter(Boolean); // Filter out any undefined values
+
+        // Format ulang pesan dengan mentions
+        const formattedText = formatMessage(text, mentionedJid);
+
+        await nvdia.sendMessage(msg.key.remoteJid, {
+            text: formattedText,
+            mentions: mentionedJid
+        }, {
+            quoted: msg
+        });
+    }
+}
+
 module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
     try {
        const fatkuns = m && (m.quoted || m);
-const quoted = (fatkuns?.mtype == 'buttonsMessage') ? fatkuns[Object.keys(fatkuns)[1]] :
-(fatkuns?.mtype == 'templateMessage') ? fatkuns.hydratedTemplate[Object.keys(fatkuns.hydratedTemplate)[1]] :
-(fatkuns?.mtype == 'product') ? fatkuns[Object.keys(fatkuns)[0]] :
-m.quoted || m;
-const mime = ((quoted?.msg || quoted) || {}).mimetype || '';
-const qmsg = (quoted?.msg || quoted);
+       const quoted = (fatkuns?.mtype == 'buttonsMessage') ? fatkuns[Object.keys(fatkuns)[1]] :
+       (fatkuns?.mtype == 'templateMessage') ? fatkuns.hydratedTemplate[Object.keys(fatkuns.hydratedTemplate)[1]] :
+       (fatkuns?.mtype == 'product') ? fatkuns[Object.keys(fatkuns)[0]] :
+       m.quoted || m;
+       const mime = ((quoted?.msg || quoted) || {}).mimetype || '';
+       const qmsg = (quoted?.msg || quoted);
        const timezone = 'Asia/Jakarta';
        const jam = moment().tz(timezone).format('dddd DD-MM-YYYY HH:mm:ss');
-       const contactName = msg.pushName || 'Unknown';
        const sender = msg.key.remoteJid;
        const isGroup = sender.endsWith('@g.us');
+       const budy = (m && typeof m.text === 'string') ? m.text : '';
        const pushname = msg.pushName || 'User';
-        
-        // Ekstrak message type dan content
+       const senderNumber = m.sender ? m.sender.replace(/[^0-9]/g, '') : '';
+       const botNumber = await nvdia.decodeJid(nvdia.user.id);
+       const isCreator = (() => {
+            // Pastikan global.owner ada dan valid
+            if (!global.owner) return false;
+            // Bersihkan format nomor owner
+            const ownerNumber = global.owner.replace(/[^0-9]/g, '');
+            // Log untuk debugging
+            console.log('Sender:', senderNumber);
+            console.log('Owner:', ownerNumber);
+            // Cek apakah nomor pengirim sama dengan nomor owner
+            return senderNumber === ownerNumber;
+        })();
+       const itsMe = (m && m.sender && m.sender == botNumber) || false;
+       const packnames = `${pushname} StickPack`;
+       const authors = `Dibuat pada\n${jam}\nCredit : Alya-San`;
+
+       // Ekstrak message type dan content
         const messageType = Object.keys(msg.message || {})[0];
         let messageContent = '';
         
@@ -70,9 +115,9 @@ const qmsg = (quoted?.msg || quoted);
             messageContent = msg.message.extendedTextMessage.text;
         } else if (['imageMessage', 'videoMessage', 'documentMessage'].includes(messageType)) {
             messageContent = msg.message[messageType].caption || '';
-        }
+       }
 
-    // Console message
+// Console message
     console.log(
     chalk.green(`[${new Date().toLocaleTimeString()}]`) + 
     chalk.blue(` Group: `) + chalk.bold(msg.key.remoteJid.includes('@g.us') ? msg.key.remoteJid : 'Private Chat') +
@@ -84,8 +129,8 @@ const qmsg = (quoted?.msg || quoted);
     chalk.cyan(` [Reply: ${isReplyToBot}, Mention: ${hasMention}]`)
 );
 
-    // Multi-prefix
-const prefixes = ['!', '.', ''];
+// Multi-prefix
+        const prefixes = ['!', '.'];
         const prefixUsed = prefixes.find(p => messageContent.startsWith(p)) || '';
         const command = messageContent.slice(prefixUsed.length).split(' ')[0].toLowerCase();
         const args = messageContent
@@ -102,7 +147,7 @@ const prefixes = ['!', '.', ''];
     
     // Handle tag/reply ke bot
         if (hasMention || isReplyToBot) {
-    if (isGroup && (!aiGroupStatus.has(msg.key.remoteJid) || aiGroupStatus.get(msg.key.remoteJid) !== false)) {
+    if (isGroup && !prefixUsed && (!aiGroupStatus.has(msg.key.remoteJid) || aiGroupStatus.get(msg.key.remoteJid) !== false)) {
         if (msg.key.fromMe) return;
         console.log('Bot sedang ditag atau direply!!');
         await handleAlya(nvdia, msg, messageContent, true);
@@ -122,42 +167,40 @@ const prefixes = ['!', '.', ''];
 }
 
         // Handle private chat tanpa prefix
-        if (!msg.key.fromMe && !isGroup && !prefixUsed) {
+        if (!isGroup && !prefixUsed) {
             console.log('Private chat terdeteksi...');
             await handleAIPrivate(nvdia, msg, messageContent);
             return;
         }
 
-
-  
     switch (command) {
 case 'sticker':
 case 'stiker':
 case 's': {
-    if (!quoted) return nvdia.sendMessage(sender, { text:`Balas Video/Image Dengan Caption ${prefixes + command}`}, { quoted: msg });
+    if (!quoted) return nvdia.sendMessage(sender, { text:`Balas Video/Image Dengan Caption ${prefixUsed + command}`}, { quoted: msg });
 
     if (/image/.test(mime)) {
         let media = await quoted.download();
         let encmedia = await nvdia.sendImageAsSticker(m.chat, media, m, {
-            packname: global.packname,
-            author: global.author
+            packname: packnames,
+            author: authors
         });
         await fs.unlinkSync(encmedia);
     } else if (/video/.test(mime)) {
         if ((quoted.msg || quoted).seconds > 11) return m.reply('Maksimal 10 detik!');
         let media = await quoted.download();
         let encmedia = await nvdia.sendVideoAsSticker(m.chat, media, m, {
-            packname: global.packname,
-            author: global.author
+            packname: packnames,
+            author: authors
         });
         await fs.unlinkSync(encmedia);
     } else {
-        return nvdia.sendMessage(sender, { text:`Kirim Gambar/Video Dengan Caption ${prefixes + command}\nDurasi Video 1-9 Detik`}, {quoted: msg});
+        return nvdia.sendMessage(sender, { text:`Kirim Gambar/Video Dengan Caption ${prefixUsed + command}\nDurasi Video 1-9 Detik`}, { quoted: msg });
     }
 }
 break;
 case 'alyaon':
-    if (isGroup && sender === global.owner + '@s.whatsapp.net') {
+    if (isCreator) {
         aiGroupStatus.set(msg.key.remoteJid, true);
         await reply(nvdia, msg, 'AI responses are now ON in this group. Conversation session started.');
     } else {
@@ -166,19 +209,14 @@ case 'alyaon':
     break;
 
 case 'alyaoff':
-    if (isGroup && sender === global.owner + '@s.whatsapp.net') {
+    if (isCreator) {
         aiGroupStatus.set(msg.key.remoteJid, false);
         clearGroupConversation(msg.key.remoteJid);
         await reply(nvdia, msg, 'AI responses are now OFF in this group. Conversation session cleared.');
     } else {
         await reply(nvdia, msg, 'Only bot owner can use this command.');
     }
-    break;
-        case 'halo':
-        let halo = 'Halo apa kabar??'
-        nvdia.sendMessage(sender, { text: halo}, { quoted: msg });
-      
-            break;
+break;
           case 'menu':
           let menuk = `*Simple saja menunya✨*
 #AI Menu
@@ -192,17 +230,21 @@ case 'alyaoff':
  • instagram | ig <link>
  • pinterest <query>
  • pinterest2 | pin2 <link>
- • pinterest3 | pin3 <linkvideo/query>
  • play <link/query> (limit!)
  • play2 <link/query>
  • spotify <link/query>
  • tiktok | tt <link>
  
 #Tools Menu
- • info 
+ • bratvideo <text>
+ • colorize
+ • enhance
  • ping
- • halo
  • neofetch
+ • removebg
+ • restore
+ • tagsw
+ • upscale
 
 #Sticker Menu
  • stiker | s | tikel 
@@ -221,10 +263,6 @@ case 'alyaoff':
                     }
                 }
             }, { quoted: msg });
-            break;
-
-        case 'info':
-            await reply(nvdia, msg, 'Ini adalah bot WhatsApp sederhana dengan multi-prefix!');
             break;
 
         case 'ping':
@@ -281,6 +319,63 @@ CPU: ${cpuInfo.manufacturer} ${cpuInfo.brand} - ${cpuInfo.speed}GHz
                   }, { quoted: msg });
     });
     break;
+case 'bratvideo': {
+    const text = args.join(' ');
+    if (!text) return reply(nvdia, msg, `Contoh: ${prefixUsed + command} hai`);
+    if (text.length > 250) return reply(nvdia, msg, `Karakter terbatas, max 250!`);
+    const words = text.split(" ");
+    const tempDir = path.join(process.cwd(), 'lib');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+    const framePaths = [];
+    try {
+        for (let i = 0; i < words.length; i++) {
+            const currentText = words.slice(0, i + 1).join(" ");
+            const res = await axios.get(
+                `https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(currentText)}`,
+                { responseType: "arraybuffer" }
+            );
+            const framePath = path.join(tempDir, `frame${i}.mp4`);
+            fs.writeFileSync(framePath, res.data);
+            framePaths.push(framePath);
+        }
+    const fileListPath = path.join(tempDir, "filelist.txt");
+        let fileListContent = "";
+        for (let i = 0; i < framePaths.length; i++) {
+            fileListContent += `file '${framePaths[i]}'\n`;
+            fileListContent += `duration 0.7\n`;
+        }
+        fileListContent += `file '${framePaths[framePaths.length - 1]}'\n`;
+        fileListContent += `duration 2\n`;
+    fs.writeFileSync(fileListPath, fileListContent);
+        const outputVideoPath = path.join(tempDir, "output.mp4");
+        execSync(
+            `ffmpeg -y -f concat -safe 0 -i ${fileListPath} -vf "fps=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p ${outputVideoPath}`
+        );
+        await nvdia.sendMessage(msg.key.remoteJid, {
+            video: { url: outputVideoPath },
+            caption: 'Brat Video Result',
+            contextInfo: {
+                externalAdReply: {
+                showAdAttribution: true,
+                    title: 'Brat Video',
+                    body: `${jam}`,
+                    thumbnailUrl: pickRandom(ftreply),
+                    mediaType: 1,
+                    renderLargerThumbnail: true
+                }
+            }
+        }, { quoted: msg });
+     framePaths.forEach((frame) => {
+            if (fs.existsSync(frame)) fs.unlinkSync(frame);
+        });
+        if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+        if (fs.existsSync(outputVideoPath)) fs.unlinkSync(outputVideoPath);
+    } catch (error) {
+        console.error('Brat Video Error:', error);
+        reply(nvdia, msg, 'Terjadi kesalahan');
+    }
+}
+break;
 case 'brat': {
     let text;
 
@@ -294,13 +389,13 @@ case 'brat': {
     }
 
     if (!text) {
-        return nvdia.sendMessage(sender, { text:`Penggunaan: ${prefixes + command} <teks>`}, { quoted: msg });
+        return nvdia.sendMessage(sender, { text:`Penggunaan: ${prefixUsed + command} <teks>`}, { quoted: msg });
     }
 
     let ngawiStik = await getBuffer(`https://brat.caliphdev.com/api/brat?text=${encodeURIComponent(text)}`);
     await nvdia.sendImageAsSticker(m.chat, ngawiStik, m, {
-        packname: `Sticker by ${pushname}`,
-        author: `Dibuat pada\n${jam}`
+        packname: packnames,
+        author: authors
     });
 }
 break;            
@@ -314,47 +409,61 @@ case 'play': {
     try {
         const searchQuery = args.join(' ');
         const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w\-_]+/;
-        let videoInfo, videoUrl;
+        let videoInfo;
 
         // Send initial loading message
         const loadingMsg = await nvdia.sendMessage(sender, { 
-            text: '?? Mencari video...'
+            text: '⌛ Mencari video...'
         }, { quoted: msg });
 
         if (ytRegex.test(searchQuery)) {
-            videoUrl = searchQuery;
-            const response = await axios.get(`https://api.botcahx.eu.org/api/dowloader/yt?url=${videoUrl}&apikey=kqj7BEgI`);
-            if (!response.data.status) throw new Error('Gagal mendapatkan informasi video');
-            videoInfo = response.data.result;
+            // Direct URL provided
+            const videoUrl = searchQuery;
+            const response = await axios.get(`https://api.agatz.xyz/api/ytmp4?url=${videoUrl}`);
+            videoInfo = {
+                title: response.data.title,
+                thumbnail: response.data.thumb,
+                duration: response.data.duration,
+                mp4: response.data.result,
+                quality: response.data.quality
+            };
+
+            // Get audio URL
+            const audioResponse = await axios.get(`https://api.agatz.xyz/api/ytmp3?url=${videoUrl}`);
+            videoInfo.mp3 = audioResponse.data.result;
+            
         } else {
-            const searchResponse = await axios.get(`https://api.botcahx.eu.org/api/search/yts?query=${encodeURIComponent(searchQuery)}&apikey=kqj7BEgI`);
+            // Search query provided
+            const searchResponse = await axios.get(`https://api.agatz.xyz/api/ytsearch?message=${encodeURIComponent(searchQuery)}`);
             if (!searchResponse.data.result || searchResponse.data.result.length === 0) {
                 throw new Error('Video tidak ditemukan');
             }
-            const firstVideo = searchResponse.data.result[0];
-            videoUrl = firstVideo.url;
             
-            const downloadResponse = await axios.get(`https://api.botcahx.eu.org/api/dowloader/yt?url=${videoUrl}&apikey=kqj7BEgI`);
-            if (!downloadResponse.data.status) throw new Error('Gagal mendapatkan informasi video');
-            videoInfo = downloadResponse.data.result;
+            const firstVideo = searchResponse.data.result[0];
+            
+            // Get video and audio URLs
+            const videoResponse = await axios.get(`https://api.agatz.xyz/api/ytmp4?url=${firstVideo.url}`);
+            const audioResponse = await axios.get(`https://api.agatz.xyz/api/ytmp3?url=${firstVideo.url}`);
+            
+            videoInfo = {
+                title: videoResponse.data.title,
+                thumbnail: videoResponse.data.thumb,
+                duration: videoResponse.data.duration,
+                mp4: videoResponse.data.result,
+                mp3: audioResponse.data.result,
+                quality: videoResponse.data.quality
+            };
         }
-
-        // Format duration
-        const duration = parseInt(videoInfo.duration);
-        const minutes = Math.floor(duration / 60);
-        const seconds = duration % 60;
-        const formattedDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
         // Create message with buttons
         await nvdia.sendMessage(sender, {
-            image: { url: videoInfo.thumb },
-            caption: `*Video Ditemukan!* ✨\n\n*Judul:* ${videoInfo.title}\n*Durasi:* ${formattedDuration}\n\nSilahkan ketik:\n\n*.audio* - untuk download MP3\n*.video* - untuk download MP4`,
+            image: { url: videoInfo.thumbnail },
+            caption: `*Video Ditemukan!* ✨\n\n*Judul:* ${videoInfo.title}\n*Durasi:* ${videoInfo.duration}\n*Quality:* ${videoInfo.quality}\n\nSilahkan ketik:\n\n*.audio* - untuk download MP3\n*.video* - untuk download MP4`,
             footer: 'Alya✨'
         }, { quoted: msg });
 
-        // Set up state
+        // Store video info in state
         setState(sender, 'awaiting_format', {
-            videoUrl,
             videoInfo
         });
 
@@ -365,8 +474,6 @@ case 'play': {
         
         if (error.message === 'Video tidak ditemukan') {
             errorMsg = 'Video tidak ditemukan. Silakan coba kata kunci lain.';
-        } else if (error.message === 'Gagal mendapatkan informasi video') {
-            errorMsg = 'Gagal mendapatkan informasi video. Silakan coba lagi nanti.';
         } else if (error.response && error.response.status === 404) {
             errorMsg = 'API tidak dapat diakses. Silakan coba lagi nanti.';
         } else if (error.code === 'ENOTFOUND') {
@@ -377,6 +484,7 @@ case 'play': {
     }
 }
 break;
+
 case 'audio': case 'video': {
     const userState = getState(sender);
     if (!userState || userState.state !== 'awaiting_format') {
@@ -404,8 +512,8 @@ case 'audio': case 'video': {
                         title: videoInfo.title,
                         body: "Click here to watch on YouTube",
                         mediaType: 2,
-                        thumbnailUrl: videoInfo.thumb,
-                        mediaUrl: videoInfo.source
+                        thumbnailUrl: videoInfo.thumbnail,
+                        mediaUrl: videoInfo.mp4
                     }
                 }
             }, { quoted: msg });
@@ -413,7 +521,7 @@ case 'audio': case 'video': {
             // Send video
             await nvdia.sendMessage(msg.key.remoteJid, {
                 video: { url: videoInfo.mp4 },
-                caption: `?? *${videoInfo.title}*\n\n⚡ Download By Alya✨`,
+                caption: `✨ *${videoInfo.title}*\n\n⚡ Download By Alya✨`,
                 mimetype: 'video/mp4',
                 fileName: `${videoInfo.title}.mp4`
             }, { quoted: msg });
@@ -427,7 +535,6 @@ case 'audio': case 'video': {
     }
 }
 break;
-
 case 'play2': {
     if (!args.length) {
         await reply(nvdia, msg, `Masukan judul!\nContoh: ${prefixUsed + command} 1番輝く星`);
@@ -831,26 +938,32 @@ case 'stop': {
 }
 break;
 
-case 'pin2': case 'pinterest2': {
-    const url = args.length > 0 ? args[0] : '';
-    await handlePinterest(nvdia, msg, url);
+case 'pin2':
+case 'pinterst2': {
+    if (!args[0]) return reply(nvdia, msg, 'Url mana.');
+    await handlePin(nvdia, msg, args[0]);
 }
 break;
-case 'pin3': case 'pinterest3': {
-    await handlePinApi(nvdia, msg, args);
-    break;
-}
-case 'next3': {
-    await handleNext(nvdia, msg);
-    break;
-}
-case 'stop3': {
-    await handleStop(nvdia, msg);
-}
-break;
-case 'fb': case 'fesnuk': {
-    const url = args.length > 0 ? args[0] : '';
-    await handleFacebook(nvdia, msg, url);
+case 'fb':
+case 'facebook':
+case 'fbdl': {
+    if (!args[0]) {
+        await nvdia.sendMessage(sender, { 
+            text: `Please provide a Facebook video URL\n\nExample: ${prefixUsed}fb https://www.facebook.com/watch?v=123456789` 
+        }, { quoted: msg });
+        return;
+    }
+
+    const url = args[0];
+    // More lenient URL validation that accepts various Facebook URL formats
+    if (!url.includes('facebook.com') && !url.includes('fb.watch')) {
+        await nvdia.sendMessage(sender, { 
+            text: '❌ Invalid Facebook video URL. Please provide a valid Facebook video link.' 
+        }, { quoted: msg });
+        return;
+    }
+
+    await handleFacebookDownload(nvdia, msg, url);
 }
 break;
 case 'd': 
@@ -878,6 +991,88 @@ case 'cai': {
     }
 }
 break;
+case 'tagsw': {
+    if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
+    
+    if (!args.length && !quoted) return reply(nvdia, msg, `Masukkan teks untuk status atau reply gambar/video dengan caption`);
+
+    try {
+        let media = null;
+        let options = {};
+        const jids = [msg.key.participant || sender, msg.key.remoteJid];
+        const captionPrefix = `Request by: ${pushname}\n\n`; // Menambahkan nama requester
+
+        if (quoted) {
+            const mime = quoted.mtype || quoted.mediaType || '';
+            if (mime.includes('image')) {
+                media = await quoted.download();
+                options = {
+                    image: media,
+                    caption: captionPrefix + (args.join(' ') || qmsg.text || ''),
+                };
+            } else if (mime.includes('video')) {
+                media = await quoted.download();
+                options = {
+                    video: media,
+                    caption: captionPrefix + (args.join(' ') || qmsg.text || ''),
+                };
+            } else {
+                options = {
+                    text: captionPrefix + (args.join(' ') || qmsg.text || ''),
+                };
+            }
+        } else {
+            options = {
+                text: captionPrefix + args.join(' '),
+            };
+        }
+
+        const groupMetadata = await nvdia.groupMetadata(msg.key.remoteJid);
+        const participants = groupMetadata.participants.map(a => a.id);
+
+        await nvdia.sendMessage("status@broadcast", 
+            options,
+            {
+                backgroundColor: "#7ACAA7",
+                textArgb: 0xffffffff,
+                font: 1,
+                statusJidList: participants,
+                additionalNodes: [
+                    {
+                        tag: "meta",
+                        attrs: {},
+                        content: [
+                            {
+                                tag: "mentioned_users",
+                                attrs: {},
+                                content: jids.map((jid) => ({
+                                    tag: "to",
+                                    attrs: { jid: msg.key.remoteJid },
+                                    content: undefined,
+                                })),
+                            },
+                        ],
+                    },
+                ],
+            }
+        );
+
+        await sendMessageWithMentions(nvdia, msg, `Status updated successfully by @${msg.sender.split('@')[0]}!`);
+        
+    } catch (error) {
+        console.error('Error in tagsw:', error);
+        await reply(nvdia, msg, `Failed to update status: ${error.message}`);
+    }
+}
+break;
+case 'removebg':
+case 'enhance':
+case 'upscale':
+case 'restore':
+case 'colorize': {
+    await handlePxpic(nvdia, m, command);
+    break;
+}
 case 'hd': {
     const handleHDUpscale = require('./handlers/ftrHd');
     
@@ -911,12 +1106,50 @@ case 'hd': {
     }
 }
 break;
-}
-    
-  } catch (error) {
+default:
+                if (budy.startsWith('=>')) {
+                    if (!isCreator) return;
+                    function Return(sul) {
+                        sat = JSON.stringify(sul, null, 2);
+                        bang = util.format(sat);
+                        if (sat == undefined) {
+                            bang = util.format(sul);
+                        }
+                        return nvdia.sendMessage(sender, { text: bang }, { quoted: msg });
+                    }
+                    try {
+                        reply(util.format(eval(`(async () => { return ${budy.slice(3)} })()`)));
+                    } catch (e) {
+                        nvdia.sendMessage(sender, { text: String(e) }, { quoted: msg });
+                    }
+                }
+
+                if (budy.startsWith('>')) {
+                    if (!isCreator) return;
+                    let kode = budy.trim().split(/ +/)[0];
+                    let teks;
+                    try {
+                        teks = await eval(`(async () => { ${kode == ">>" ? "return" : ""} ${q}})()`)
+                    } catch (e) {
+                        teks = e;
+                    } finally {
+                        await nvdia.sendMessage(sender, { text: require('util').format(teks) }, { quoted: msg });
+                    }
+                }
+
+                if (budy.startsWith('$')) {
+                    if (!isCreator) return;
+                    exec(budy.slice(2), (error, stdout) => {
+                        if (error) return nvdia.sendMessage(sender, { text: `${error}` }, { quoted: msg });
+                        if (stdout) return nvdia.sendMessage(sender, { text: stdout }, { quoted: msg });
+                    });
+                }
+        }
+    } catch (error) {
         console.error('Error in message handler:', error);
         await reply(nvdia, msg, `Maaf, terjadi kesalahan: ${error.message}`);
     }
+
 };
 
 // Di bagian awal file, tambahkan state management
