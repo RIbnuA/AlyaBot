@@ -22,18 +22,15 @@ const pipeline = promisify(stream.pipeline);
 const aiGroupStatus = new Map();
 const { execSync } = require('child_process');
 const handleAIPrivate = require('./handlers/aiPrivateHandler');
-const { handleAlya, isTaggingBot, clearGroupConversation } = require('./handlers/aiAlya');
+const { handleAlya, isTaggingBot, sendResponse, clearGroupConversation } = require('./handlers/aiAlya');
 const handleAI = require('./handlers/aiClaude');
-const { handleSimiSettings, handleSimiChat } = require('./handlers/aiSimi');
 const { handleBlackboxChat } = require('./handlers/aiBlackbox');
-const { handleCharAI, handleCharList, chatbot } = require('./handlers/aiCharAi');
 const handleDownload = require('./handlers/dlAll');
 const { handleTtsave } = require('./handlers/dlTtsave');
 const handlePxpic = require('./handlers/dlPxpic');
 const { handleIgram } = require('./handlers/dlIgram');
 const handlePin = require('./handlers/dlPin');
 const { handleFacebookDownload } = require('./handlers/dlFesnuk');
-const { handleTest } = require('./handlers/toolsEval');
 
 moment.locale('id');
 
@@ -202,7 +199,7 @@ break;
 case 'alyaon':
     if (isCreator) {
         aiGroupStatus.set(msg.key.remoteJid, true);
-        await reply(nvdia, msg, 'AI responses are now ON in this group. Conversation session started.');
+        await reply(nvdia, msg, 'Alya siap menjawab pertanyaan');
     } else {
         await reply(nvdia, msg, 'Only bot owner can use this command.');
     }
@@ -212,7 +209,7 @@ case 'alyaoff':
     if (isCreator) {
         aiGroupStatus.set(msg.key.remoteJid, false);
         clearGroupConversation(msg.key.remoteJid);
-        await reply(nvdia, msg, 'AI responses are now OFF in this group. Conversation session cleared.');
+        await reply(nvdia, msg, 'Ok, Alya akan beristirahat.');
     } else {
         await reply(nvdia, msg, 'Only bot owner can use this command.');
     }
@@ -223,7 +220,6 @@ break;
  • alya 
  • ai
  • blackbox | bb (unstable!)
- • simi (unstable!)
  
 #Download Menu
  • fesnuk | fb <link>
@@ -977,20 +973,6 @@ case 'download': {
     await handleDownload(nvdia, msg, url, platform);
 }
 break;
-case 'cai': {
-    if (args.length === 0) {
-        await chatbot.handleCharList(nvdia, msg);
-        return;
-    }
-    
-    if (args[0].toLowerCase() === 'list') {
-        await chatbot.handleCharList(nvdia, msg);
-    } else {
-        const fullText = args.join(' ');
-        await chatbot.handleCharAI(nvdia, msg, fullText);
-    }
-}
-break;
 case 'tagsw': {
     if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
     
@@ -1073,39 +1055,6 @@ case 'colorize': {
     await handlePxpic(nvdia, m, command);
     break;
 }
-case 'hd': {
-    const handleHDUpscale = require('./handlers/ftrHd');
-    
-    if (!msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage) {
-        return reply(nvdia, msg, "Reply foto nya");
-    }
-
-    const resolutionOption = parseInt(args[0]);
-    if (!resolutionOption) {
-        return reply(nvdia, msg, `pakai opsi hd yang memiliki 5 type yaitu
-
-1 = 1080p
-2 = 2k
-3 = 4k
-4 = 8k
-5 = 16k
-`);
-    }
-
-    try {
-        const media = msg.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage;
-        const bufferImage = await downloadMediaMessage(
-            { message: { imageMessage: media } }, 
-            'buffer',
-            {}
-        );
-        await handleHDUpscale(nvdia, msg, resolutionOption, bufferImage);
-    } catch (error) {
-        console.error('HD Command Error:', error);
-        reply(nvdia, msg, 'Gagal mengunduh atau memproses gambar');
-    }
-}
-break;
 default:
                 if (budy.startsWith('=>')) {
                     if (!isCreator) return;
