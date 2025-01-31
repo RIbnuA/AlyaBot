@@ -397,8 +397,11 @@ case 'brat': {
 break;            
 
 case 'play': {
-    if (!args.length) {
-        nvdia.sendMessage(sender, { text: `Masukan judul/link!\ncontoh:\n\n${prefixUsed + command} 1番輝く星\n${prefixUsed + command} https://youtube.com/watch?v=example` }, { quoted: msg });
+    if (!args[0]) { // Check if first argument exists
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan judul/link!\ncontoh:\n\n${prefixUsed + command} Kingslayer\n${prefixUsed + command} https://youtube.com/watch?v=example`,
+            quoted: msg 
+        });
         return;
     }
 
@@ -415,46 +418,62 @@ case 'play': {
         if (ytRegex.test(searchQuery)) {
             // Direct URL provided
             const videoUrl = searchQuery;
-            const response = await axios.get(`https://api.agatz.xyz/api/ytmp4?url=${videoUrl}`);
-            videoInfo = {
-                title: response.data.title,
-                thumbnail: response.data.thumb,
-                duration: response.data.duration,
-                mp4: response.data.result,
-                quality: response.data.quality
-            };
-
-            // Get audio URL
-            const audioResponse = await axios.get(`https://api.agatz.xyz/api/ytmp3?url=${videoUrl}`);
-            videoInfo.mp3 = audioResponse.data.result;
+            const mp4Response = await axios.get(`https://fastrestapis.fasturl.cloud/downup/ytmp4?url=${videoUrl}&quality=720`);
+            const mp3Response = await axios.get(`https://fastrestapis.fasturl.cloud/downup/ytmp3?url=${videoUrl}&quality=256kbps`);
             
+            if (!mp4Response.data.status === 200 || !mp3Response.data.status === 200) {
+                throw new Error('Gagal mendapatkan informasi video');
+            }
+            
+            videoInfo = {
+                title: mp4Response.data.result.title,
+                thumbnail: mp4Response.data.result.metadata.thumbnail,
+                duration: mp4Response.data.result.metadata.duration,
+                views: mp4Response.data.result.metadata.views,
+                author: mp4Response.data.result.author.name,
+                mp4: mp4Response.data.result.media,
+                mp3: mp3Response.data.result.media,
+                quality: {
+                    video: mp4Response.data.result.quality,
+                    audio: mp3Response.data.result.quality
+                }
+            };
         } else {
             // Search query provided
-            const searchResponse = await axios.get(`https://api.agatz.xyz/api/ytsearch?message=${encodeURIComponent(searchQuery)}`);
-            if (!searchResponse.data.result || searchResponse.data.result.length === 0) {
+            const searchResponse = await axios.get(`https://vapis.my.id/api/yts?q=${encodeURIComponent(searchQuery)}`);
+            if (!searchResponse.data.status || !searchResponse.data.data || searchResponse.data.data.length === 0) {
                 throw new Error('Video tidak ditemukan');
             }
             
-            const firstVideo = searchResponse.data.result[0];
+            const firstVideo = searchResponse.data.data[0];
             
-            // Get video and audio URLs
-            const videoResponse = await axios.get(`https://api.agatz.xyz/api/ytmp4?url=${firstVideo.url}`);
-            const audioResponse = await axios.get(`https://api.agatz.xyz/api/ytmp3?url=${firstVideo.url}`);
+            // Get video and audio info using the found video URL
+            const mp4Response = await axios.get(`https://fastrestapis.fasturl.cloud/downup/ytmp4?url=${firstVideo.url}&quality=720`);
+            const mp3Response = await axios.get(`https://fastrestapis.fasturl.cloud/downup/ytmp3?url=${firstVideo.url}&quality=256kbps`);
             
+            if (!mp4Response.data.status === 200 || !mp3Response.data.status === 200) {
+                throw new Error('Gagal mendapatkan informasi video');
+            }
+
             videoInfo = {
-                title: videoResponse.data.title,
-                thumbnail: videoResponse.data.thumb,
-                duration: videoResponse.data.duration,
-                mp4: videoResponse.data.result,
-                mp3: audioResponse.data.result,
-                quality: videoResponse.data.quality
+                title: mp4Response.data.result.title,
+                thumbnail: mp4Response.data.result.metadata.thumbnail,
+                duration: mp4Response.data.result.metadata.duration,
+                views: mp4Response.data.result.metadata.views,
+                author: mp4Response.data.result.author.name,
+                mp4: mp4Response.data.result.media,
+                mp3: mp3Response.data.result.media,
+                quality: {
+                    video: mp4Response.data.result.quality,
+                    audio: mp3Response.data.result.quality
+                }
             };
         }
 
         // Create message with buttons
         await nvdia.sendMessage(sender, {
             image: { url: videoInfo.thumbnail },
-            caption: `*Video Ditemukan!* ✨\n\n*Judul:* ${videoInfo.title}\n*Durasi:* ${videoInfo.duration}\n*Quality:* ${videoInfo.quality}\n\nSilahkan ketik:\n\n*.audio* - untuk download MP3\n*.video* - untuk download MP4`,
+            caption: `*Video Ditemukan!* ✨\n\n*Judul:* ${videoInfo.title}\n*Channel:* ${videoInfo.author}\n*Durasi:* ${videoInfo.duration}\n*Views:* ${videoInfo.views}\n*Quality Video:* ${videoInfo.quality.video}p\n*Quality Audio:* ${videoInfo.quality.audio}\n\nSilahkan ketik:\n\n*.audio* - untuk download MP3\n*.video* - untuk download MP4`,
             footer: 'Alya✨'
         }, { quoted: msg });
 
@@ -470,6 +489,8 @@ case 'play': {
         
         if (error.message === 'Video tidak ditemukan') {
             errorMsg = 'Video tidak ditemukan. Silakan coba kata kunci lain.';
+        } else if (error.message === 'Gagal mendapatkan informasi video') {
+            errorMsg = 'Gagal mendapatkan informasi video. Silakan coba lagi nanti.';
         } else if (error.response && error.response.status === 404) {
             errorMsg = 'API tidak dapat diakses. Silakan coba lagi nanti.';
         } else if (error.code === 'ENOTFOUND') {
@@ -477,57 +498,6 @@ case 'play': {
         }
         
         await reply(nvdia, msg, errorMsg);
-    }
-}
-break;
-
-case 'audio': case 'video': {
-    const userState = getState(sender);
-    if (!userState || userState.state !== 'awaiting_format') {
-        return;
-    }
-
-    const { videoInfo } = userState.data;
-    const isAudio = command === 'audio';
-
-    try {
-        // Send waiting message
-        await nvdia.sendMessage(msg.key.remoteJid, { 
-            text: `⌛ Mohon tunggu, sedang memproses ${isAudio ? 'audio' : 'video'}...` 
-        }, { quoted: msg });
-
-        if (isAudio) {
-            // Send audio
-            await nvdia.sendMessage(msg.key.remoteJid, {
-                audio: { url: videoInfo.mp3 },
-                mimetype: 'audio/mpeg',
-                fileName: `${videoInfo.title}.mp3`,
-                contextInfo: {
-                    externalAdReply: {
-                        showAdAttribution: true,
-                        title: videoInfo.title,
-                        body: "Click here to watch on YouTube",
-                        mediaType: 2,
-                        thumbnailUrl: videoInfo.thumbnail,
-                        mediaUrl: videoInfo.mp4
-                    }
-                }
-            }, { quoted: msg });
-        } else {
-            // Send video
-            await nvdia.sendMessage(msg.key.remoteJid, {
-                video: { url: videoInfo.mp4 },
-                caption: `✨ *${videoInfo.title}*\n\n⚡ Download By Alya✨`,
-                mimetype: 'video/mp4',
-                fileName: `${videoInfo.title}.mp4`
-            }, { quoted: msg });
-        }
-
-    } catch (error) {
-        console.error(`Error processing ${isAudio ? 'audio' : 'video'}:`, error);
-        await reply(nvdia, msg, `Gagal memproses ${isAudio ? 'audio' : 'video'}. Silakan coba lagi nanti.`);
-    } finally {
-        userStates.delete(sender);
     }
 }
 break;
@@ -1044,6 +1014,60 @@ case 'tagsw': {
     } catch (error) {
         console.error('Error in tagsw:', error);
         await reply(nvdia, msg, `Failed to update status: ${error.message}`);
+    }
+}
+break;
+case 'getcontact': {
+    if (!args[0]) return reply(nvdia, msg, `Example: ${prefixUsed}getcontact 081234567890`);
+    
+    let phoneNumber = args[0];
+    // Remove any non-numeric characters and ensure proper format
+    phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+    
+    // Add country code if not present
+    if (!phoneNumber.startsWith('62')) {
+        phoneNumber = '62' + phoneNumber.replace(/^0+/, '');
+    }
+    
+    try {
+        const response = await axios.get(`https://fastrestapis.fasturl.cloud/tool/getcontact?number=${phoneNumber}`);
+        const data = response.data;
+        
+        if (data.status === 200 && data.content === "Success") {
+            const result = data.result;
+            
+            // Format all results
+            let formattedResponse = `*GETCONTACT RESULTS*\n\n`;
+            
+            // User data
+            formattedResponse += `*◈ USER DATA ◈*\n`;
+            formattedResponse += `Name: ${result.userData.name}\n`;
+            formattedResponse += `Phone: ${result.userData.phone}\n`;
+            formattedResponse += `Provider: ${result.userData.provider}\n\n`;
+            
+            // Tags/Names
+            formattedResponse += `*◈ TAGS/NAMES FOUND ◈*\n`;
+            if (result.tags && result.tags.length > 0) {
+                result.tags.forEach((tag, index) => {
+                    formattedResponse += `${index + 1}. ${tag}\n`;
+                });
+            } else {
+                formattedResponse += `No tags found\n`;
+            }
+            
+            formattedResponse += `\n*Total Names:* ${result.tags.length}\n`;
+            formattedResponse += `\n_Data provided by - ${data.creator}_`;
+            
+            await nvdia.sendMessage(msg.key.remoteJid, {
+                text: formattedResponse,
+                quoted: msg
+            });
+        } else {
+            await reply(nvdia, msg, 'Failed to fetch contact information. Please try again later.');
+        }
+    } catch (error) {
+        console.error('Error in getcontact:', error);
+        await reply(nvdia, msg, `Error: ${error.message}\nPlease check the number and try again.`);
     }
 }
 break;
