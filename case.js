@@ -13,24 +13,32 @@ const axios = require("axios");
 const ytdl = require('ytdl-core');
 const { createWriteStream } = require('fs');
 const { promisify, util } = require('util');
+const FormData = require('form-data');
 const stream = require('stream');
+const quoteApi = require('@neoxr/quote-api')
+const { Sticker } = require('wa-sticker-formatter')
 const { addExif } = require('./App/function/exif')
 const { smsg, formatDate, getTime, getGroupAdmins, formatp, await, sleep, runtime, clockString, msToDate, sort, toNumber, enumGetKey, fetchJson, getBuffer, json, delay, format, logic, generateProfilePicture, parseMention, getRandom, fetchBuffer, buffergif, GIFBufferToVideoBuffer, totalcase } = require('./App/function/myfunc'); 
 const { bytesToSize, checkBandwidth, formatSize, jsonformat, nganuin, shorturl, color } = require("./App/function/funcc");
 const { toAudio, toPTT, toVideo, ffmpeg, addExifAvatar } = require('./App/function/converter')
+const { remini } = require('./App/remini');
+const { tmpfiles, Uguu, gofile, catbox, mediaUploader, videy, caliph, doods, picu } = require('./App/uploader');
 const pipeline = promisify(stream.pipeline);
 const aiGroupStatus = new Map();
 const { execSync } = require('child_process');
-const handleAIPrivate = require('./handlers/aiPrivateHandler');
+const { handleAIPrivate, replyAI } = require('./handlers/aiPrivateHandler');
 const { handleAlya, isTaggingBot, sendResponse, clearGroupConversation } = require('./handlers/aiAlya');
 const handleAI = require('./handlers/aiClaude');
 const { handleBlackboxChat } = require('./handlers/aiBlackbox');
+const { handleAnilistSearch, handleAnilistDetail, handleAnilistPopular } = require('./handlers/aiAnilist');
+const { handleAppleMusicSearch, handleAppleMusicDownload } = require('./handlers/dlAppleMusic');
 const handleDownload = require('./handlers/dlAll');
 const { handleTtsave } = require('./handlers/dlTtsave');
 const handlePxpic = require('./handlers/dlPxpic');
 const { handleIgram } = require('./handlers/dlIgram');
 const handlePin = require('./handlers/dlPin');
 const { handleFacebookDownload } = require('./handlers/dlFesnuk');
+const handleGetContact = require('./handlers/toolGetContact');
 
 moment.locale('id');
 
@@ -62,7 +70,28 @@ async function sendMessageWithMentions(nvdia, msg, text, additionalMentions = []
         });
     }
 }
+//State management
+const state = new Map();
 
+function setState(sender, key, value) {
+    const userState = state.get(sender) || {};
+    userState[key] = value;
+    state.set(sender, userState);
+}
+
+function getState(sender, key) {
+    const userState = state.get(sender);
+    return userState ? userState[key] : null;
+}
+
+function clearState(sender, key) {
+    const userState = state.get(sender);
+    if (userState && key) {
+        delete userState[key];
+    } else {
+        state.delete(sender);
+    }
+}
 module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
     try {
        const fatkuns = m && (m.quoted || m);
@@ -92,8 +121,10 @@ module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
             return senderNumber === ownerNumber;
         })();
        const itsMe = (m && m.sender && m.sender == botNumber) || false;
-       const packnames = `${pushname} StickPack`;
+       const packnames = `Sticker`;
        const authors = `Dibuat pada\n${jam}\nCredit : Alya-San`;
+       const more = String.fromCharCode(8206);
+       const readmore = more.repeat(4001);
 
        // Ekstrak message type dan content
         const messageType = Object.keys(msg.message || {})[0];
@@ -113,6 +144,133 @@ module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
         } else if (['imageMessage', 'videoMessage', 'documentMessage'].includes(messageType)) {
             messageContent = msg.message[messageType].caption || '';
        }
+
+const ContentTypes = {
+    PINTEREST: 'pinterest',
+    INSTAGRAM_REELS: 'igreels',
+};
+
+const contentConfig = {
+    [ContentTypes.PINTEREST]: {
+        stateKey: 'pinterest_search',
+        itemName: 'gambar',
+        command: 'pinterest',
+        dataKey: 'images', // Key name in state object where items are stored
+        messageFormat: (item, query, currentIndex, total) => ({
+            type: 'image',
+            content: { url: item.url },
+            caption: `${item.caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Image:* ${currentIndex + 1}/${total}`
+        })
+    },
+    [ContentTypes.INSTAGRAM_REELS]: {
+        stateKey: 'igreels_search',
+        itemName: 'reels',
+        command: 'igreels',
+        dataKey: 'reels', // Key name in state object where reels are stored
+        messageFormat: (item, query, currentIndex, total) => ({
+            type: 'video',
+            content: { url: item.url },
+            caption: `${item.caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Reels:* ${currentIndex + 1}/${total}`,
+            options: { gifPlayback: false }
+        })
+    }
+};
+
+const handleContentNavigation = async (nvdia, msg, sender, action) => {
+    try {
+        // Cek semua tipe konten yang aktif
+        const activeContents = Object.values(ContentTypes)
+            .map(type => {
+                const data = getState(sender, contentConfig[type].stateKey);
+                const dataKey = contentConfig[type].dataKey;
+                return {
+                    type,
+                    data,
+                    items: data ? data[dataKey] : null // Get items using the correct key
+                };
+            })
+            .filter(({ data, items }) => data && Array.isArray(items) && items.length > 0);
+
+        if (activeContents.length === 0) {
+            const commands = Object.values(contentConfig)
+                .map(config => `*.${config.command} <kata kunci>*`)
+                .join(' atau ');
+            await reply(nvdia, msg, `Tidak ada pencarian aktif. Silakan lakukan pencarian dengan ${commands}`);
+            return;
+        }
+
+        if (action === 'stop') {
+            // Hentikan semua pencarian aktif
+            activeContents.forEach(({ type }) => {
+                clearState(sender, contentConfig[type].stateKey);
+            });
+
+            const availableCommands = activeContents
+                .map(({ type }) => `*.${contentConfig[type].command} <kata kunci>*`)
+                .join('\n');
+            
+            await reply(nvdia, msg, `Pencarian dihentikan. Anda dapat memulai pencarian baru dengan:\n${availableCommands}`);
+            return;
+        }
+
+        // Handle next action untuk setiap konten aktif
+        for (const { type, data, items } of activeContents) {
+            const config = contentConfig[type];
+            const nextIndex = data.currentIndex + 1;
+            
+            if (nextIndex >= items.length) {
+                await reply(nvdia, msg, `Semua ${config.itemName} sudah ditampilkan. Gunakan *.${config.command} <kata kunci>* untuk mencari ${config.itemName} lain.`);
+                clearState(sender, config.stateKey);
+                continue;
+            }
+
+            // Update state
+            setState(sender, config.stateKey, {
+                ...data,
+                currentIndex: nextIndex
+            });
+
+            // Validasi item sebelum memformat pesan
+            const currentItem = items[nextIndex];
+            if (!currentItem || !currentItem.url) {
+                console.error(`Invalid item at index ${nextIndex} for type ${type}:`, currentItem);
+                continue;
+            }
+
+            // Kirim pesan loading jika diperlukan
+            let loadingMsg;
+            if (type === ContentTypes.INSTAGRAM_REELS) {
+                loadingMsg = await nvdia.sendMessage(sender, { 
+                    text: '⏳ Mengambil konten selanjutnya...'
+                }, { quoted: msg });
+            }
+
+            // Format pesan sesuai tipe konten
+            const messageData = config.messageFormat(
+                currentItem,
+                data.query,
+                nextIndex,
+                items.length
+            );
+
+            // Kirim konten
+            await nvdia.sendMessage(sender, {
+                [messageData.type]: messageData.content,
+                caption: `${messageData.caption}\n\nKetik *.next* untuk ${config.itemName} selanjutnya\nKetik *.stop* untuk mencari ${config.itemName} lain`,
+                ...messageData.options
+            }, { quoted: msg });
+
+            // Hapus pesan loading jika ada
+            if (loadingMsg) {
+                await nvdia.sendMessage(sender, { delete: loadingMsg.key });
+            }
+        }
+
+    } catch (error) {
+        console.error(`Error pada fitur ${action}:`, error);
+        await reply(nvdia, msg, `Terjadi kesalahan saat ${action === 'stop' ? 'menghentikan pencarian' : 'mengambil konten selanjutnya'}. Silakan coba lagi.`);
+    }
+};
 
 // Console message
     console.log(
@@ -171,29 +329,199 @@ module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
         }
 
     switch (command) {
-case 'sticker':
+case 'tikel':
 case 'stiker':
+case 'sticker':
 case 's': {
-    if (!quoted) return nvdia.sendMessage(sender, { text:`Balas Video/Image Dengan Caption ${prefixUsed + command}`}, { quoted: msg });
+    try {
+        if (!quoted && !(msg.message?.imageMessage || msg.message?.videoMessage)) {
+            return nvdia.sendMessage(sender, { 
+                text: `Kirim/Reply Gambar/Video/Gif Dengan Caption ${prefixUsed + command}`,
+                quoted: msg 
+            });
+        }
 
-    if (/image/.test(mime)) {
-        let media = await quoted.download();
-        let encmedia = await nvdia.sendImageAsSticker(m.chat, media, m, {
-            packname: packnames,
-            author: authors
-        });
-        await fs.unlinkSync(encmedia);
-    } else if (/video/.test(mime)) {
-        if ((quoted.msg || quoted).seconds > 11) return m.reply('Maksimal 10 detik!');
-        let media = await quoted.download();
-        let encmedia = await nvdia.sendVideoAsSticker(m.chat, media, m, {
-            packname: packnames,
-            author: authors
-        });
-        await fs.unlinkSync(encmedia);
-    } else {
-        return nvdia.sendMessage(sender, { text:`Kirim Gambar/Video Dengan Caption ${prefixUsed + command}\nDurasi Video 1-9 Detik`}, { quoted: msg });
+        let mediaData;
+        if (quoted) {
+            if (!/image|video/g.test(mime)) {
+                return nvdia.sendMessage(sender, { 
+                    text: 'Media yang di-reply harus berupa gambar/video/gif!',
+                    quoted: msg 
+                });
+            }
+
+            if (/video/g.test(mime)) {
+                if ((quoted.msg || quoted).seconds > 10) {
+                    return nvdia.sendMessage(sender, {
+                        text: 'Maksimal durasi video 10 detik!',
+                        quoted: msg
+                    });
+                }
+            }
+            
+            mediaData = await quoted.download();
+        } 
+
+        else {
+            if (msg.message.imageMessage) {
+                media = await downloadMediaMessage(msg, 'buffer', {});
+            } else if (msg.message.videoMessage) {
+                if (msg.message.videoMessage.seconds > 10) {
+                    return nvdia.sendMessage(sender, {
+                        text: 'Maksimal durasi video 10 detik!',
+                        quoted: msg
+                    });
+                }
+                mediaData = await downloadMediaMessage(msg, 'buffer', {});
+            }
+        }
+
+        let packname = args.length > 1 ? args.join(' ') : packnames;
+        let author = authors;
+        
+        const stickerMetadata = {
+            type: 'full',
+            pack: packname,
+            author: author,
+            quality: 100 // You can adjust quality (1-100)
+        };
+
+        if (/image/.test(mime)) {
+            let sticker = await new Sticker(mediaData, stickerMetadata)
+            .toBuffer();
+        await nvdia.sendFile(m.chat, sticker, 'sticker.webp', '', m);    
+        } else if (/video/.test(mime)) {
+            let sticker = await nvdia.sendVideoAsSticker(m.chat, mediaData, m, stickerMetadata);
+            await fs.unlinkSync(sticker);
+        }
+
+    } catch (error) {
+        console.error('Error in sticker creation:', error);
+        await reply(nvdia, msg, 'Gagal membuat sticker! Pastikan media yang dikirim valid.');
     }
+}
+break;
+case 'smeme': {
+    let respond = `Balas Gambar Dengan Caption ${prefixUsed + command} teks bawah|teks atas`;
+    if (!quoted) return nvdia.sendMessage(sender, { text: respond }, { quoted: msg });
+    if (!/image/.test(mime)) return nvdia.sendMessage(sender, { text: respond }, { quoted: msg });
+    if (!args.join(' ')) return nvdia.sendMessage(sender, { text: respond }, { quoted: msg });
+
+    await reply(nvdia, msg, 'Sedang membuat stiker...');
+    const atas = args.join(' ').split('|')[1] ? args.join(' ').split('|')[1] : '-';
+    const bawah = args.join(' ').split('|')[0] ? args.join(' ').split('|')[0] : '-';
+
+    try {
+        let dwnld = await quoted.download();
+        let fatGans = await catbox(dwnld);
+        let smeme = `https://api.memegen.link/images/custom/${encodeURIComponent(bawah)}/${encodeURIComponent(atas)}.png?background=${fatGans}`;
+
+        let stiker = await nvdia.sendImageAsSticker(sender, smeme, m, {
+            packname: packnames,
+            author: authors,
+            quality: 50
+        });
+        await fs.unlinkSync(stiker);
+    } catch (error) {
+        console.error('Smeme error:', error);
+        await reply(nvdia, msg, 'Gagal membuat stiker meme');
+    }
+}
+break;
+case 'qc': {
+    let text, orang;
+    
+    // Handle quoted message case
+    if (m.quoted) {
+        const quotedMsg = m.quoted;
+        text = quotedMsg.text || '';
+        if (!text) {
+            return nvdia.sendMessage(sender, { 
+                text: 'Pesan yang di-reply harus mengandung text!' 
+            }, { quoted: msg });
+        }
+        orang = quotedMsg.sender || quotedMsg.participant || msg.quoted.key.participant;
+    } 
+    // Handle direct message case
+    else {
+        if (!args[0]) {
+            return nvdia.sendMessage(sender, { 
+                text: 'Mana teksnya?',
+                quoted: msg 
+            });
+        }
+        text = args.join(' ');
+        orang = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || msg.sender;
+    }
+
+    // Color mapping
+    const colorMap = {
+        '--merah': '#FF0000',
+        '--biru': '#0000FF',
+        '--hijau': '#00FF00',
+        '--kuning': '#FFFF00',
+        '--pink': '#FFC0CB',
+        '--ungu': '#800080',
+        '--orange': '#FFA500',
+        '--coklat': '#A52A2A',
+        '--abu': '#808080',
+        '--putih': '#FFFFFF'
+    };
+
+    // Check for color flags
+    let backgroundColor = '#2E4053';
+    for (const [flag, color] of Object.entries(colorMap)) {
+        if (text.includes(flag)) {
+            backgroundColor = color;
+            text = text.replace(flag, '').trim();
+            break;
+        }
+    }
+
+    // Get avatar and name
+    const avatar = await nvdia.profilePictureUrl(orang).catch(_ => 'https://i.ibb.co/2WzLyGk/profile.jpg');
+    const number = await nvdia.getName(orang);
+
+    // Prepare quote JSON
+    const json = {
+        "type": "quote",
+        "format": "png",
+        "backgroundColor": backgroundColor,
+        "width": 512,
+        "height": 768,
+        "scale": 2,
+        "messages": [{
+            "entities": [],
+            "avatar": true,
+            "from": {
+                "id": 1,
+                "name": number,
+                "photo": {
+                    "url": avatar
+                }
+            },
+            "text": text,
+            "replyMessage": {}
+        }]
+    };
+
+    // Create sticker function
+    async function createSticker(req, url, quality) {
+        let stickerMetadata = {
+            type: 'full',
+            pack: packnames,
+            author: authors,
+            quality
+        }
+        return (new Sticker(req ? req : url, stickerMetadata)).toBuffer()
+    }
+
+    // Process and send sticker
+    await reply(nvdia, msg, 'Membuat sticker...');
+    const res = await quoteApi(json)
+    const buffer = Buffer.from(res.image, 'base64')
+    let stiker = await createSticker(buffer, false)
+    nvdia.sendFile(m.chat, stiker, 'sticker.webp', '', m)
 }
 break;
 case 'alyaon':
@@ -215,36 +543,49 @@ case 'alyaoff':
     }
 break;
           case 'menu':
-          let menuk = `*Simple saja menunya✨*
-#AI Menu
- • alya 
+          let menuk = `Halo👋 ${pushname}\n> Respontime : ${Date.now() - startTime}\n> Berikut adalah fitur yang Alya miliki
+`+ readmore + `
+*AI Menu*
+ • alya
  • ai
  • blackbox | bb (unstable!)
- 
-#Download Menu
+
+*Anime Menu*
+ • anime <query>
+ • animeinfo <link anilist>
+ • animetop
+
+*Download Menu*
+ • amdl <link>
  • fesnuk | fb <link>
  • instagram | ig <link>
- • pinterest <query>
- • pinterest2 | pin2 <link>
- • play <link/query> (limit!)
- • play2 <link/query>
- • spotify <link/query>
+ • pindl <link>
  • tiktok | tt <link>
- 
-#Tools Menu
+
+*Search Menu*
+ • amsearch <query>
+ • igreels | reels <query>
+ • pinterest | pin <query>
+ • play <link/query>
+ • spotify <link/query>
+
+*Sticker Menu*
+ • brat <text>
+ • qc
+ • smeme
+ • stiker | s | tikel
+
+*Tools Menu*
  • bratvideo <text>
  • colorize
  • enhance
+ • hdvid
  • ping
  • neofetch
  • removebg
  • restore
  • tagsw
- • upscale
-
-#Sticker Menu
- • stiker | s | tikel 
- • brat <text>`
+ • upscale`
            await nvdia.sendMessage(msg.key.remoteJid, {
                 text: menuk,
                   ptt: true,
@@ -412,7 +753,7 @@ case 'play': {
 
         // Send initial loading message
         const loadingMsg = await nvdia.sendMessage(sender, { 
-            text: '⌛ Mencari video...'
+            text: '⌛ Mencari...'
         }, { quoted: msg });
 
         if (ytRegex.test(searchQuery)) {
@@ -470,12 +811,22 @@ case 'play': {
             };
         }
 
-        // Create message with buttons
-        await nvdia.sendMessage(sender, {
-            image: { url: videoInfo.thumbnail },
-            caption: `*Video Ditemukan!* ✨\n\n*Judul:* ${videoInfo.title}\n*Channel:* ${videoInfo.author}\n*Durasi:* ${videoInfo.duration}\n*Views:* ${videoInfo.views}\n*Quality Video:* ${videoInfo.quality.video}p\n*Quality Audio:* ${videoInfo.quality.audio}\n\nSilahkan ketik:\n\n*.audio* - untuk download MP3\n*.video* - untuk download MP4`,
-            footer: 'Alya✨'
-        }, { quoted: msg });
+        await nvdia.sendMessage(msg.key.remoteJid, {
+            text: Buffer.from('*Video Ditemukan!* ✨\n\n╔╾┅━┅━┅━┅━┅━┅━┅━┅⋄\n┇❏ `Judul:` ' + videoInfo.title + '\n┇❏ `Channel:` ' + videoInfo.author + '\n┇❏ `Durasi:` ' + videoInfo.duration + '\n┇❏ `Views:` ' + videoInfo.views + '\n┇❏ `Quality Video:` ' + videoInfo.quality.video + 'p\n┇❏ `Quality Audio:` ' + videoInfo.quality.audio + '\n╚╾┅━┅━┅━┅━┅━┅━┅━┅⋄\n\nSilahkan ketik:\n*.audio* - untuk download MP3\n*.video* - untuk download MP4').toString(),
+            footer: 'Alya✨',
+            ptt: false,
+                    contextInfo: {
+                    externalAdReply: {
+                    showAdAttribution: true,
+                    title: videoInfo.title,
+                    body: videoInfo.author,
+                    thumbnailUrl: videoInfo.thumbnail,
+                    mediaType: 1,
+                    previewType: 1,
+                    renderLargerThumbnail: true
+                    }
+                }
+            }, { quoted: msg });
 
         // Store video info in state
         setState(sender, 'awaiting_format', {
@@ -501,118 +852,53 @@ case 'play': {
     }
 }
 break;
-case 'play2': {
-    if (!args.length) {
-        await reply(nvdia, msg, `Masukan judul!\nContoh: ${prefixUsed + command} 1番輝く星`);
+case 'audio': case 'video': {
+    const userState = getState(sender);
+    if (!userState || userState.state !== 'awaiting_format') {
         return;
     }
 
-    await reply(nvdia, msg, '⏳ Mohon tunggu sebentar...');
+    const { videoInfo } = userState.data;
+    const isAudio = command === 'audio';
 
     try {
-        const search = require("yt-search");
-        const { youtube } = require("btch-downloader");
-        
-        // Function untuk get buffer dari URL dengan retry
-        async function getBuffer(url, retries = 3) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await axios({
-                        method: 'get',
-                        url,
-                        responseType: 'arraybuffer',
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Accept': '*/*',
-                            'Connection': 'keep-alive'
-                        },
-                        timeout: 30000 // 30 seconds timeout
-                    });
-                    return response.data;
-                } catch (err) {
-                    if (i === retries - 1) throw err;
-                    await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
-                }
-            }
-        }
-
-        // Function untuk validasi ukuran file
-        async function validateAudioUrl(url, minSize = 1024 * 100) { // minimal 100KB
-            try {
-                const response = await axios.head(url);
-                const fileSize = parseInt(response.headers['content-length']);
-                if (fileSize < minSize) {
-                    throw new Error('File audio terlalu kecil, mencoba mengunduh ulang...');
-                }
-                return true;
-            } catch (error) {
-                return false;
-            }
-        }
-
-        // Function untuk download dengan retry
-        async function downloadWithRetry(videoUrl, maxRetries = 3) {
-            let lastError;
-            
-            for (let i = 0; i < maxRetries; i++) {
-                try {
-                    const result = await youtube(videoUrl);
-                    
-                    // Validasi ukuran file
-                    if (await validateAudioUrl(result.mp3)) {
-                        return result;
-                    }
-                    throw new Error('Invalid file size');
-                } catch (err) {
-                    lastError = err;
-                    if (i < maxRetries - 1) {
-                        await reply(nvdia, msg, `?? Percobaan download ke-${i + 2}...`);
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    }
-                }
-            }
-            throw lastError;
-        }
-
-        // Cari video
-        const query = args.join(' ');
-        const searchResults = await search(query);
-        const video = searchResults.videos[0];
-
-        if (!video) {
-            await reply(nvdia, msg, '❌ Video tidak ditemukan');
-            return;
-        }
-
-        // Cek durasi
-        if (video.seconds >= 3600) {
-            await reply(nvdia, msg, '❌ Durasi video lebih dari 1 jam!');
-            return;
-        }
-
-        // Download dengan retry mechanism
-        const audioUrl = await downloadWithRetry(video.url);
-        
-        // Get thumbnail
-        const thumbBuffer = await getBuffer(video.thumbnail);
-
-        // Format views number
-        const formattedViews = video.views.toLocaleString('id-ID');
-
-        // Send audio as document with detailed info
-        await nvdia.sendMessage(msg.key.remoteJid, {
-            document: {
-                url: audioUrl.mp3 || audioUrl.url || audioUrl.dlmp3
-            },
-            mimetype: 'audio/mpeg',
-            fileName: `${video.title}.mp3`,
-            jpegThumbnail: thumbBuffer,
-            caption: `?? *${video.title}*\n⌚ *Durasi:* ${video.timestamp}\n?? *Views:* ${formattedViews}\n?? *Link:* ${video.url}\n\n_Jika file rusak, silakan coba lagi._`
+        // Send waiting message
+        await nvdia.sendMessage(msg.key.remoteJid, { 
+            text: `⌛ Mohon tunggu, sedang memproses ${isAudio ? 'audio' : 'video'}...` 
         }, { quoted: msg });
 
+        if (isAudio) {
+            // Send audio
+            await nvdia.sendMessage(msg.key.remoteJid, {
+                audio: { url: videoInfo.mp3 },
+                mimetype: 'audio/mpeg',
+                fileName: `${videoInfo.title}.mp3`,
+                contextInfo: {
+                    externalAdReply: {
+                        showAdAttribution: true,
+                        title: videoInfo.title,
+                        body: `Channel: ${videoInfo.author}`,
+                        mediaType: 2,
+                        thumbnailUrl: videoInfo.thumbnail,
+                        mediaUrl: videoInfo.mp4
+                    }
+                }
+            }, { quoted: msg });
+        } else {
+            // Send video
+            await nvdia.sendMessage(msg.key.remoteJid, {
+                video: { url: videoInfo.mp4 },
+                caption: `✨ *${videoInfo.title}*\nChannel: ${videoInfo.author}\n\n`,
+                mimetype: 'video/mp4',
+                fileName: `${videoInfo.title}.mp4`
+            }, { quoted: msg });
+        }
+
     } catch (error) {
-        console.error('Error in play command:', error);
-        await reply(nvdia, msg, `❌ Terjadi kesalahan: ${error.message}\nSilakan coba lagi.`);
+        console.error(`Error processing ${isAudio ? 'audio' : 'video'}:, error`);
+        await reply(nvdia, msg, `Gagal memproses ${isAudio ? 'audio' : 'video'}. Silakan coba lagi nanti.`);
+    } finally {
+        userStates.delete(sender);
     }
 }
 break;
@@ -798,49 +1084,94 @@ case 'tt': case 'tiktok': {
     await handleTtsave(nvdia, msg, url);
 }
 break;
-case 'pinterest': {
+case 'next': {
+    await handleContentNavigation(nvdia, msg, sender, 'next');
+}
+break;
+
+case 'stop': {
+    await handleContentNavigation(nvdia, msg, sender, 'stop');
+}
+break;
+case 'pinterest': case 'pin': {
     if (!args.length) {
-        nvdia.sendMessage(sender, { text: `Masukan kata kunci!\ncontoh:\n\n${prefixUsed + command} Alya` }, { quoted: msg });
+        await reply(nvdia, msg, `Masukan kata kunci!\ncontoh:\n\n${prefixUsed + command} Alya`);
         return;
     }
 
     try {
-        // Send initial loading message
+        // Send loading message
         const loadingMsg = await nvdia.sendMessage(sender, { 
-            text: '?? Mencari gambar di Pinterest...'
+            text: '⏳ Mencari gambar di Pinterest...'
         }, { quoted: msg });
 
-        // Get images from API
+        // Search Pinterest
         const query = args.join(' ');
-        const response = await axios.get(`https://api.ryzendesu.vip/api/search/pinterest?query=${encodeURIComponent(query)}`);
-        
-        if (!Array.isArray(response.data) || response.data.length === 0) {
-            throw new Error('Gambar tidak ditemukan');
+        const { data } = await axios.get(`https://www.pinterest.com/resource/BaseSearchResource/get/`, {
+            params: {
+                source_url: `/search/pins/?q=${query}`,
+                data: JSON.stringify({
+                    options: {
+                        isPrefetch: false,
+                        query: query,
+                        scope: "pins",
+                        no_fetch_context_on_resource: false
+                    },
+                    context: {}
+                })
+            }
+        });
+
+        // Process results
+        const results = data.resource_response.data.results.filter(v => v.images?.orig);
+        if (!results.length) {
+            await nvdia.sendMessage(sender, { 
+                delete: loadingMsg.key 
+            });
+            await reply(nvdia, msg, 'Tidak ada gambar ditemukan. Silakan coba kata kunci lain.');
+            return;
         }
+
+        // Format results
+        const images = results.map(result => ({
+            url: result.images.orig.url,
+            caption: `*[Pinterest Image]*\n\n` +
+                    `> *Upload by:* ${result.pinner.username}\n` +
+                    `> *Full Name:* ${result.pinner.full_name}\n` +
+                    `> *Followers:* ${result.pinner.follower_count}\n` +
+                    `> *Caption:* ${result.grid_title || '-'}\n` +
+                    `> *Source:* https://id.pinterest.com/pin/${result.id}`
+        }));
 
         // Save images to state
         setState(sender, 'pinterest_search', {
-            images: response.data,
+            images: images,
             currentIndex: 0,
             query: query
         });
 
         // Send first image
-        const firstImage = response.data[0];
         await nvdia.sendMessage(sender, {
-            image: { url: firstImage },
-            caption: `?? Pinterest Image (1/${response.data.length})\n\n?? Hasil pencarian: "${query}"\n\nKetik *.next* untuk gambar selanjutnya\nKetik *.stop* untuk mencari gambar lain`,
+            image: { url: images[0].url },
+            caption: `${images[0].caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Image:* 1/${images.length}\n\nKetik *.next* untuk gambar selanjutnya\nKetik *.stop* untuk mencari gambar lain`,
         }, { quoted: msg });
+
+        // Delete loading message
+        await nvdia.sendMessage(sender, { 
+            delete: loadingMsg.key 
+        });
 
     } catch (error) {
         console.error("Error pada fitur pinterest:", error);
         
         let errorMsg = 'Terjadi kesalahan saat mencari gambar.';
         
-        if (error.message === 'Gambar tidak ditemukan') {
-            errorMsg = 'Tidak ada gambar ditemukan. Silakan coba kata kunci lain.';
-        } else if (error.response && error.response.status === 404) {
-            errorMsg = 'API tidak dapat diakses. Silakan coba lagi nanti.';
+        if (error.response) {
+            if (error.response.status === 404) {
+                errorMsg = 'Pinterest API tidak dapat diakses. Silakan coba lagi nanti.';
+            } else {
+                errorMsg = 'Gagal mengambil data dari Pinterest. Silakan coba lagi.';
+            }
         } else if (error.code === 'ENOTFOUND') {
             errorMsg = 'Gagal mengakses server. Periksa koneksi internet Anda.';
         }
@@ -850,68 +1181,14 @@ case 'pinterest': {
 }
 break;
 
-case 'next': {
-    const state = getState(sender);
-    if (!state || state.state !== 'pinterest_search') {
-        await reply(nvdia, msg, '⚠️ Tidak ada pencarian Pinterest yang aktif. Gunakan *.pinterest <kata kunci>* untuk mencari gambar.');
-        return;
-    }
-
-    try {
-        const { images, currentIndex, query } = state.data;
-        const nextIndex = currentIndex + 1;
-
-        // Check if we've reached the end
-        if (nextIndex >= images.length) {
-            await reply(nvdia, msg, '✅ Semua gambar telah ditampilkan. Gunakan *.pinterest <kata kunci>* untuk mencari gambar lain.');
-            userStates.delete(sender);
-            return;
-        }
-
-        // Send next image
-        await nvdia.sendMessage(sender, {
-            image: { url: images[nextIndex] },
-            caption: `?? Pinterest Image (${nextIndex + 1}/${images.length})\n\n?? Hasil pencarian: "${query}"\n\nKetik *.next* untuk gambar selanjutnya\nKetik *.stop* untuk mencari gambar lain`,
-        }, { quoted: msg });
-
-        // Update state with new index
-        setState(sender, 'pinterest_search', {
-            ...state.data,
-            currentIndex: nextIndex
-        });
-
-    } catch (error) {
-        console.error("Error pada fitur next:", error);
-        await reply(nvdia, msg, 'Gagal menampilkan gambar selanjutnya. Silakan coba lagi.');
-    }
-}
-break;
-
-case 'stop': {
-    const state = getState(sender);
-    if (!state || state.state !== 'pinterest_search') {
-        await reply(nvdia, msg, '⚠️ Tidak ada pencarian Pinterest yang aktif.');
-        return;
-    }
-
-    try {
-        userStates.delete(sender);
-        await reply(nvdia, msg, '✅ Pencarian dihentikan. Gunakan *.pinterest <kata kunci>* untuk mencari gambar baru.');
-    } catch (error) {
-        console.error("Error pada fitur stop:", error);
-        await reply(nvdia, msg, 'Gagal menghentikan pencarian.');
-    }
-}
-break;
-
-case 'pin2':
-case 'pinterst2': {
+case 'pindl':
+case 'pinterstdl': {
     if (!args[0]) return reply(nvdia, msg, 'Url mana.');
     await handlePin(nvdia, msg, args[0]);
 }
 break;
 case 'fb':
-case 'facebook':
+case 'fesnuk':
 case 'fbdl': {
     if (!args[0]) {
         await nvdia.sendMessage(sender, { 
@@ -932,27 +1209,94 @@ case 'fbdl': {
     await handleFacebookDownload(nvdia, msg, url);
 }
 break;
-case 'd': 
-case 'download': {
-    const q = args.join(' ');
-    if (!q) return reply(nvdia, msg, `*Masukkan URL yang ingin diunduh!*\n\nFormat: download <url>|<platform>`);
+case 'igreels': case 'reels': {
+    if (!args.length) {
+        await reply(nvdia, msg, `Masukan kata kunci!\ncontoh:\n\n${prefixUsed + command} Alya`);
+        return;
+    }
 
-    const [url, platform] = q.split('|');
-    if (!url || !platform) return reply(nvdia, msg, `*Format tidak valid!*\n\nContoh: download <url>|<platform>`);
+    try {
+        // Send loading message
+        const loadingMsg = await nvdia.sendMessage(sender, { 
+            text: '⏳ Mencari reels di Instagram...'
+        }, { quoted: msg });
 
-    await handleDownload(nvdia, msg, url, platform);
+        // Search Instagram Reels
+        const query = args.join(' ');
+        const response = await axios.get(`https://api.vreden.my.id/api/instagram/reels?query=${encodeURIComponent(query)}`);
+
+        if (!response.data.result.media || response.data.result.media.length === 0) {
+            await nvdia.sendMessage(sender, { 
+                delete: loadingMsg.key 
+            });
+            await reply(nvdia, msg, 'Tidak ada reels ditemukan. Silakan coba kata kunci lain.');
+            return;
+        }
+
+        // Format results
+        const reels = response.data.result.media.map(reel => ({
+            url: reel.reels.url,
+            thumbnail: reel.reels.thumbnail,
+            caption: `*[Instagram Reels]*\n\n` +
+                    `> *Upload by:* ${reel.profile.username}\n` +
+                    `> *Full Name:* ${reel.profile.full_name}\n` +
+                    `> *Duration:* ${reel.reels.duration}s\n\n` +
+                    `> *Caption:* ${reel.caption.text}\n\n` +
+                    `> *Stats:*\n` +
+                    `> 👁 Views: ${reel.statistics.play_count}\n` +
+                    `> ❤️ Likes: ${reel.statistics.like_count}\n` +
+                    `> 💬 Comments: ${reel.statistics.comment_count}\n` +
+                    `> 🔄 Shares: ${reel.statistics.share_count}\n\n` +
+                    `> *Link:* ${reel.reels.video}`
+        }));
+
+        // Save reels to state
+        setState(sender, 'igreels_search', {
+            reels: reels,
+            currentIndex: 0,
+            query: query
+        });
+
+        // Send first video
+        await nvdia.sendMessage(sender, {
+            video: { url: reels[0].url },
+            caption: `${reels[0].caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Reels:* 1/${reels.length}\n\nKetik *.nextreel* untuk reels selanjutnya\nKetik *.stopreels* untuk mencari reels lain`,
+            gifPlayback: false
+        }, { quoted: msg });
+
+        // Delete loading message
+        await nvdia.sendMessage(sender, { 
+            delete: loadingMsg.key 
+        });
+
+    } catch (error) {
+        console.error("Error pada fitur igreels:", error);
+        
+        let errorMsg = 'Terjadi kesalahan saat mencari reels.';
+        
+        if (error.response) {
+            if (error.response.status === 404) {
+                errorMsg = 'Instagram API tidak dapat diakses. Silakan coba lagi nanti.';
+            } else {
+                errorMsg = 'Gagal mengambil data dari Instagram. Silakan coba lagi.';
+            }
+        } else if (error.code === 'ENOTFOUND') {
+            errorMsg = 'Gagal mengakses server. Periksa koneksi internet Anda.';
+        }
+        
+        await reply(nvdia, msg, errorMsg);
+    }
 }
 break;
+
 case 'tagsw': {
-    if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
-    
     if (!args.length && !quoted) return reply(nvdia, msg, `Masukkan teks untuk status atau reply gambar/video dengan caption`);
 
     try {
         let media = null;
         let options = {};
         const jids = [msg.key.participant || sender, msg.key.remoteJid];
-        const captionPrefix = `Request by: ${pushname}\n\n`; // Menambahkan nama requester
+        const captionPrefix = `Request by: ${pushname}\nReason: `; // Menambahkan nama requester
 
         if (quoted) {
             const mime = quoted.mtype || quoted.mediaType || '';
@@ -1010,11 +1354,16 @@ case 'tagsw': {
         );
 
         await sendMessageWithMentions(nvdia, msg, `Status updated successfully by @${msg.sender.split('@')[0]}!`);
-        
+
     } catch (error) {
         console.error('Error in tagsw:', error);
         await reply(nvdia, msg, `Failed to update status: ${error.message}`);
     }
+}
+break;
+case 'getcontact2': {
+    if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
+    await handleGetContact(nvdia, msg, args.join(' '));
 }
 break;
 case 'getcontact': {
@@ -1071,14 +1420,357 @@ case 'getcontact': {
     }
 }
 break;
+case 'gitpush': {
+    if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
+    
+    // Check if file path is provided
+    if (!args[0]) return reply(nvdia, msg, `Example: ${prefixUsed}uploadgithub folder/custom-filename.jpg`);
+    
+    try {
+        const githubToken = global.githubtoken;
+        const owner = 'rizurinn'; // Your GitHub username
+        const repo = 'anu'; // Repository name
+        const branch = 'main';
+        
+        // Get quoted message
+        const quoted = m.quoted ? m.quoted : m;
+        const mime = (quoted.msg || quoted).mimetype || '';
+        
+        // Check if media exists
+        if (!mime) return reply(nvdia, msg, 'Please reply to a media message (image/video/file)');
+        
+        // Send reaction
+        await nvdia.sendMessage(msg.key.remoteJid, { 
+            react: { 
+                text: "??", 
+                key: msg.key 
+            } 
+        });
+        
+        // Download media
+        const media = await quoted.download();
+        
+        // Use custom file path from args
+        const customPath = args[0];
+        // Ensure the path starts without a slash
+        const filePath = customPath.startsWith('/') ? customPath.slice(1) : customPath;
+        
+        // Convert media content to base64
+        const base64Content = Buffer.from(media).toString('base64');
+        
+        // Upload file to GitHub
+        const response = await axios.put(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+            {
+                message: `Upload file ${filePath}`,
+                content: base64Content,
+                branch: branch,
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${githubToken}`,
+                    'Content-Type': 'application/json',
+                },
+            }
+        );
+        
+        // Generate raw URL for uploaded file
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
+        
+        await nvdia.sendMessage(msg.key.remoteJid, {
+            text: `✅ File berhasil diupload ke GitHub!\n\n?? Path: ${filePath}\n?? Raw URL: ${rawUrl}`,
+            quoted: msg
+        });
+        
+    } catch (error) {
+        console.error('Error in uploadgithub:', error);
+        if (error.response) {
+            const status = error.response.status;
+            if (status === 404) {
+                return reply(nvdia, msg, 'Error: Repository tidak ditemukan atau token tidak valid');
+            } else if (status === 409) {
+                return reply(nvdia, msg, 'Error: File dengan nama tersebut sudah ada di repository');
+            }
+        }
+        await reply(nvdia, msg, `Error: ${error.message}`);
+    }
+}
+break;
+// Inside the switch (command) block in case.js
+
+case 'remini': case 'hdr': case 'hd': {
+    if (!quoted || !quoted.msg) {
+        await reply(nvdia, msg, `Reply/Kirim photo yang mau di jernihkan`);
+        return;
+    }
+
+    if (!/image/.test(mime)) {
+        await reply(nvdia, msg, `Reply/Kirim photo yang mau di jernihkan`);
+        return;
+    }
+
+    try {
+        // Send loading message
+        const loadingMsg = await nvdia.sendMessage(sender, { 
+            text: '⏳ Sedang memproses gambar...'
+        }, { quoted: msg });
+
+        // Download the image
+        let imageBuffer;
+        if (quoted.msg) {
+            imageBuffer = await downloadMediaMessage(quoted, 'buffer', {});
+        }
+
+        // Convert buffer to base64
+        const base64Image = imageBuffer.toString('base64');
+
+        // Send to remini API
+        const response = await fetch("https://lexica.qewertyy.dev/upscale", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                image_data: base64Image,
+                format: "binary"
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to process image');
+        }
+
+        const resultBuffer = Buffer.from(await response.arrayBuffer());
+        const fileSize = formatp(resultBuffer.length);
+
+        // Send the processed image
+        await nvdia.sendMessage(sender, {
+            image: resultBuffer,
+            caption: `*– 乂 Remini - Image*\n> *- Ukuran photo :* ${fileSize}`,
+        }, { quoted: msg });
+
+        // Delete loading message
+        await nvdia.sendMessage(sender, { 
+            delete: loadingMsg.key 
+        });
+
+    } catch (error) {
+        console.error('Error in remini processing:', error);
+        await reply(nvdia, msg, 'Maaf, terjadi kesalahan saat memproses gambar. Silakan coba lagi.');
+    }
+}
+break;
+case 'hdvid':
+case 'reminivid': {
+    if (!quoted) return nvdia.sendMessage(sender, { text: `Balas Video Dengan Caption ${prefixUsed}hdvid fps` }, { quoted: msg });
+    if (!/video/.test(mime)) return nvdia.sendMessage(sender, { text: 'Kirim/balas video dengan caption *.hdvid* 60' }, { quoted: msg });
+    
+    const fps = parseInt(args[0]);
+    if (!fps) return nvdia.sendMessage(sender, { text: 'Masukkan fps, contoh: *.hdvid* 60' }, { quoted: msg });
+    if (fps > 30) return nvdia.sendMessage(sender, { text: 'Maksimal fps adalah 30 fps!' }, { quoted: msg });
+    if ((quoted.msg || quoted).seconds > 30) return nvdia.sendMessage(sender, { text: 'Maksimal video 30 detik!' }, { quoted: msg });
+
+    await nvdia.sendMessage(sender, { text: 'Wait... Executing the [ffmpeg] and [remini] libraries, This process may take 5-15 minutes' }, { quoted: msg });
+
+    const chdir = "hd_video";
+    const timestamp = Date.now();
+    const pndir = `${chdir}/${m.sender}`;
+    const rsdir = `${chdir}/result-${m.sender}`;
+    const fdir = `${pndir}/frames/${timestamp}`;
+    const rfdir = `${rsdir}/frames/${timestamp}`;
+    const rname = `${rsdir}/${m.sender}-${timestamp}.mp4`;
+    const tempFile = `${pndir}/temp-${timestamp}.json`;
+
+    // Create directories if they don't exist
+    const dirs = [chdir, pndir, rsdir, `${pndir}/frames`, fdir, `${rsdir}/frames`, rfdir];
+    dirs.forEach(dir => {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    });
+
+    try {
+        // Download and save media
+        const media = await quoted.download();
+        fs.writeFileSync(`${pndir}/${timestamp}`, media);
+
+        // Get video information
+        await new Promise((resolve, reject) => {
+            exec(`ffprobe -v quiet -print_format json -show_format -show_streams ${pndir}/${timestamp}`, (error, stdout) => {
+                if (error) reject(error);
+                else {
+                    fs.writeFileSync(tempFile, stdout);
+                    resolve();
+                }
+            });
+        });
+
+        // Read video info
+        const videoInfo = JSON.parse(fs.readFileSync(tempFile));
+        const videoStream = videoInfo.streams.find(s => s.codec_type === 'video');
+        const width = parseInt(videoStream.width);
+        const height = parseInt(videoStream.height);
+        
+        // Calculate new dimensions maintaining aspect ratio and ensuring upscaling
+        let newWidth, newHeight;
+        const aspectRatio = width / height;
+        
+        if (width > height) {
+            // Landscape orientation
+            if (width < 1920) {
+                newWidth = 1920;
+                newHeight = Math.round(1920 / aspectRatio);
+            } else {
+                newWidth = width;
+                newHeight = height;
+            }
+        } else {
+            // Portrait orientation
+            if (height < 1920) {
+                newHeight = 1920;
+                newWidth = Math.round(1920 * aspectRatio);
+            } else {
+                newHeight = height;
+                newWidth = width;
+            }
+        }
+        
+        // Make sure dimensions are even numbers
+        newWidth = Math.floor(newWidth / 2) * 2;
+        newHeight = Math.floor(newHeight / 2) * 2;
+
+        // Extract frames with proper resolution
+        await new Promise((resolve, reject) => {
+            exec(`ffmpeg -i ${pndir}/${timestamp} -vf "fps=${fps},scale=${newWidth}:${newHeight}:flags=lanczos" ${fdir}/frame-%04d.png`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        // Process frames with remini
+        const images = fs.readdirSync(fdir);
+        let result = {};
+
+        for (let i = 0; i < images.length; i++) {
+            const image = images[i];
+            result[image] = remini(fs.readFileSync(`${fdir}/${image}`), "enhance");
+        }
+
+        const values = await Promise.all(Object.values(result));
+        Object.keys(result).forEach((key, index) => {
+            result[key] = values[index];
+        });
+
+        // Save enhanced frames
+        for (let i of Object.keys(result)) {
+            fs.writeFileSync(`${rfdir}/${i}`, result[i]);
+        }
+
+        // Combine frames back into video with high quality settings
+        await new Promise((resolve, reject) => {
+            const ffmpegCommand = `ffmpeg -framerate ${fps} -i ${rfdir}/frame-%04d.png -i ${pndir}/${timestamp} `
+                + `-c:v libx264 -preset slower -crf 18 -x264-params "aq-mode=3:aq-strength=0.8" `
+                + `-vf "scale=${newWidth}:${newHeight}:flags=lanczos,format=yuv420p" `
+                + `-maxrate 8M -bufsize 16M `
+                + `-c:a aac -b:a 192k -ar 48000 `
+                + `-movflags +faststart `
+                + `-strict experimental -shortest ${rname}`;
+            
+            exec(ffmpegCommand, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
+        // Send result in HD
+        await nvdia.sendMessage(sender, { 
+            video: fs.readFileSync(rname),
+            caption: `✨ Video telah ditingkatkan ke resolusi ${newWidth}x${newHeight}`,
+            gifPlayback: false,
+            jpegThumbnail: null,
+            mimetype: 'video/mp4',
+            height: newHeight,
+            width: newWidth,
+            headerType: 4
+        }, { 
+            quoted: msg,
+            mediaUploadTimeoutMs: 1000 * 60 * 5
+        });
+
+        // Cleanup
+        dirs.forEach(dir => {
+            if (fs.existsSync(dir)) {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        });
+        if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile);
+        }
+
+    } catch (error) {
+        console.error('HD Video processing error:', error);
+        await nvdia.sendMessage(sender, { text: `Error processing video: ${error.message}` }, { quoted: msg });
+    }
+}
+break;
 case 'removebg':
 case 'enhance':
 case 'upscale':
 case 'restore':
 case 'colorize': {
     await handlePxpic(nvdia, m, command);
-    break;
 }
+break;
+case 'anime': {
+    if (!args[0]) {
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan judul anime!\ncontoh:\n\n${prefixUsed + command} one piece` 
+        }, { quoted: msg });
+        return;
+    }
+    const query = args.join(' ');
+    await handleAnilistSearch(nvdia, msg, query);
+}
+break;
+
+case 'animeinfo': {
+    if (!args[0]) {
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan link anime!\ncontoh:\n\n${prefixUsed + command} https://anilist.co/anime/...` 
+        }, { quoted: msg });
+        return;
+    }
+    const url = args[0];
+    await handleAnilistDetail(nvdia, msg, url);
+}
+break;
+
+case 'animetop': {
+    await handleAnilistPopular(nvdia, msg);
+}
+break;
+
+case 'amsearch': {
+    if (!args[0]) {
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan judul lagu/artist!\ncontoh:\n\n${prefixUsed + command} taylor swift` 
+        }, { quoted: msg });
+        return;
+    }
+    const query = args.join(' ');
+    await handleAppleMusicSearch(nvdia, msg, query);
+}
+break;
+
+case 'amdl': {
+    if (!args[0]) {
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan link Apple Music!\ncontoh:\n\n${prefixUsed + command} https://music.apple.com/...` 
+        }, { quoted: msg });
+        return;
+    }
+    const url = args[0];
+    await handleAppleMusicDownload(nvdia, msg, url);
+}
+break;
 default:
                 if (budy.startsWith('=>')) {
                     if (!isCreator) return;
@@ -1125,30 +1817,6 @@ default:
 
 };
 
-// Di bagian awal file, tambahkan state management
-const searchResults = new Map();
-const userStates = new Map();
-
-// Tambahkan fungsi helper untuk mengelola state
-const setState = (userId, state, data = null) => {
-    userStates.set(userId, {
-        state,
-        timestamp: Date.now(),
-        data
-    });
-};
-
-const getState = (userId) => {
-    const state = userStates.get(userId);
-    if (!state) return null;
-    
-    // Hapus state jika sudah lebih dari 5 menit
-    if (Date.now() - state.timestamp > 5 * 60 * 1000) {
-        userStates.delete(userId);
-        return null;
-    }
-    return state;
-};
 
 async function reply(nvdia, msg, replyText) {
     if (msg.key && msg.key.remoteJid) {

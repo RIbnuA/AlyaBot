@@ -162,3 +162,4 @@ async function addExif(webpSticker, packname, author, categories = [''], extra =
 
 
 module.exports = { imageToWebp, videoToWebp, writeExifImg, writeExifVid, writeExif, exifAvatar, addExif }
+
