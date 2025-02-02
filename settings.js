@@ -10,4 +10,3 @@ global.ftreply = [
 global.pairing = '6288228768785'
 global.owner = '6281391620354'
 global.nomorbot = '6288228768785@s.whatsapp.net'
-global.githubtoken = ''
