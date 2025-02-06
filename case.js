@@ -28,8 +28,9 @@ const aiGroupStatus = new Map();
 const { execSync } = require('child_process');
 const { handleAIPrivate, replyAI } = require('./handlers/aiPrivateHandler');
 const { handleAlya, isTaggingBot, sendResponse, clearGroupConversation } = require('./handlers/aiAlya');
+const StateManager = require('./App/stateManager');
+const { handleNext, handleStop } = require('./lib/NextStop');
 const handleAI = require('./handlers/aiClaude');
-const { handleBlackboxChat } = require('./handlers/aiBlackbox');
 const { handleAnilistSearch, handleAnilistDetail, handleAnilistPopular } = require('./handlers/aiAnilist');
 const { handleAppleMusicSearch, handleAppleMusicDownload } = require('./handlers/dlAppleMusic');
 const handleDownload = require('./handlers/dlAll');
@@ -41,6 +42,27 @@ const { handleFacebookDownload } = require('./handlers/dlFesnuk');
 const handleGetContact = require('./handlers/toolGetContact');
 
 moment.locale('id');
+
+const searchResults = new Map();
+const userStates = new Map();
+const setState = (userId, state, data = null) => {
+    userStates.set(userId, {
+        state,
+        timestamp: Date.now(),
+        data
+    });
+};
+
+const getState = (userId) => {
+    const state = userStates.get(userId);
+    if (!state) return null;
+
+    if (Date.now() - state.timestamp > 5 * 60 * 1000) {
+        userStates.delete(userId);
+        return null;
+    }
+    return state;
+};
 
 function formatMessage(text, mentions = []) {
     // Ganti semua placeholder mention dengan format yang benar
@@ -70,28 +92,7 @@ async function sendMessageWithMentions(nvdia, msg, text, additionalMentions = []
         });
     }
 }
-//State management
-const state = new Map();
 
-function setState(sender, key, value) {
-    const userState = state.get(sender) || {};
-    userState[key] = value;
-    state.set(sender, userState);
-}
-
-function getState(sender, key) {
-    const userState = state.get(sender);
-    return userState ? userState[key] : null;
-}
-
-function clearState(sender, key) {
-    const userState = state.get(sender);
-    if (userState && key) {
-        delete userState[key];
-    } else {
-        state.delete(sender);
-    }
-}
 module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
     try {
        const fatkuns = m && (m.quoted || m);
@@ -144,133 +145,6 @@ module.exports.handleIncomingMessage = async (nvdia, msg, m) => {
         } else if (['imageMessage', 'videoMessage', 'documentMessage'].includes(messageType)) {
             messageContent = msg.message[messageType].caption || '';
        }
-
-const ContentTypes = {
-    PINTEREST: 'pinterest',
-    INSTAGRAM_REELS: 'igreels',
-};
-
-const contentConfig = {
-    [ContentTypes.PINTEREST]: {
-        stateKey: 'pinterest_search',
-        itemName: 'gambar',
-        command: 'pinterest',
-        dataKey: 'images', // Key name in state object where items are stored
-        messageFormat: (item, query, currentIndex, total) => ({
-            type: 'image',
-            content: { url: item.url },
-            caption: `${item.caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Image:* ${currentIndex + 1}/${total}`
-        })
-    },
-    [ContentTypes.INSTAGRAM_REELS]: {
-        stateKey: 'igreels_search',
-        itemName: 'reels',
-        command: 'igreels',
-        dataKey: 'reels', // Key name in state object where reels are stored
-        messageFormat: (item, query, currentIndex, total) => ({
-            type: 'video',
-            content: { url: item.url },
-            caption: `${item.caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Reels:* ${currentIndex + 1}/${total}`,
-            options: { gifPlayback: false }
-        })
-    }
-};
-
-const handleContentNavigation = async (nvdia, msg, sender, action) => {
-    try {
-        // Cek semua tipe konten yang aktif
-        const activeContents = Object.values(ContentTypes)
-            .map(type => {
-                const data = getState(sender, contentConfig[type].stateKey);
-                const dataKey = contentConfig[type].dataKey;
-                return {
-                    type,
-                    data,
-                    items: data ? data[dataKey] : null // Get items using the correct key
-                };
-            })
-            .filter(({ data, items }) => data && Array.isArray(items) && items.length > 0);
-
-        if (activeContents.length === 0) {
-            const commands = Object.values(contentConfig)
-                .map(config => `*.${config.command} <kata kunci>*`)
-                .join(' atau ');
-            await reply(nvdia, msg, `Tidak ada pencarian aktif. Silakan lakukan pencarian dengan ${commands}`);
-            return;
-        }
-
-        if (action === 'stop') {
-            // Hentikan semua pencarian aktif
-            activeContents.forEach(({ type }) => {
-                clearState(sender, contentConfig[type].stateKey);
-            });
-
-            const availableCommands = activeContents
-                .map(({ type }) => `*.${contentConfig[type].command} <kata kunci>*`)
-                .join('\n');
-            
-            await reply(nvdia, msg, `Pencarian dihentikan. Anda dapat memulai pencarian baru dengan:\n${availableCommands}`);
-            return;
-        }
-
-        // Handle next action untuk setiap konten aktif
-        for (const { type, data, items } of activeContents) {
-            const config = contentConfig[type];
-            const nextIndex = data.currentIndex + 1;
-            
-            if (nextIndex >= items.length) {
-                await reply(nvdia, msg, `Semua ${config.itemName} sudah ditampilkan. Gunakan *.${config.command} <kata kunci>* untuk mencari ${config.itemName} lain.`);
-                clearState(sender, config.stateKey);
-                continue;
-            }
-
-            // Update state
-            setState(sender, config.stateKey, {
-                ...data,
-                currentIndex: nextIndex
-            });
-
-            // Validasi item sebelum memformat pesan
-            const currentItem = items[nextIndex];
-            if (!currentItem || !currentItem.url) {
-                console.error(`Invalid item at index ${nextIndex} for type ${type}:`, currentItem);
-                continue;
-            }
-
-            // Kirim pesan loading jika diperlukan
-            let loadingMsg;
-            if (type === ContentTypes.INSTAGRAM_REELS) {
-                loadingMsg = await nvdia.sendMessage(sender, { 
-                    text: '⏳ Mengambil konten selanjutnya...'
-                }, { quoted: msg });
-            }
-
-            // Format pesan sesuai tipe konten
-            const messageData = config.messageFormat(
-                currentItem,
-                data.query,
-                nextIndex,
-                items.length
-            );
-
-            // Kirim konten
-            await nvdia.sendMessage(sender, {
-                [messageData.type]: messageData.content,
-                caption: `${messageData.caption}\n\nKetik *.next* untuk ${config.itemName} selanjutnya\nKetik *.stop* untuk mencari ${config.itemName} lain`,
-                ...messageData.options
-            }, { quoted: msg });
-
-            // Hapus pesan loading jika ada
-            if (loadingMsg) {
-                await nvdia.sendMessage(sender, { delete: loadingMsg.key });
-            }
-        }
-
-    } catch (error) {
-        console.error(`Error pada fitur ${action}:`, error);
-        await reply(nvdia, msg, `Terjadi kesalahan saat ${action === 'stop' ? 'menghentikan pencarian' : 'mengambil konten selanjutnya'}. Silakan coba lagi.`);
-    }
-};
 
 // Console message
     console.log(
@@ -543,17 +417,18 @@ case 'alyaoff':
     }
 break;
           case 'menu':
-          let menuk = `Halo👋 ${pushname}\n> Respontime : ${Date.now() - startTime}\n> Berikut adalah fitur yang Alya miliki
+          let menuk = `Halo👋 ${pushname}\n> Berikut adalah fitur yang Alya miliki
 `+ readmore + `
 *AI Menu*
  • alya
  • ai
- • blackbox | bb (unstable!)
+ • blackbox | bb
 
 *Anime Menu*
- • anime <query>
- • animeinfo <link anilist>
- • animetop
+ • anilist <query>
+ • anilistinfo
+ • anilisttop
+ • waifu
 
 *Download Menu*
  • amdl <link>
@@ -561,6 +436,10 @@ break;
  • instagram | ig <link>
  • pindl <link>
  • tiktok | tt <link>
+
+*Info Menu*
+ • neofetch
+ • ping
 
 *Search Menu*
  • amsearch <query>
@@ -574,14 +453,13 @@ break;
  • qc
  • smeme
  • stiker | s | tikel
+ • toimg | togif
 
 *Tools Menu*
  • bratvideo <text>
  • colorize
  • enhance
  • hdvid
- • ping
- • neofetch
  • removebg
  • restore
  • tagsw
@@ -620,7 +498,7 @@ CPU: ${cpuInfo.manufacturer} ${cpuInfo.brand} - ${cpuInfo.speed}GHz
              contextInfo: {
                externalAdReply: {
                     showAdAttribution: true,
-                        title: 'Pong! ??',
+                        title: 'Pong! 🏓',
                         body: `${jam}`,
                         thumbnailUrl: pickRandom(ftreply),
                         mediaType: 1
@@ -802,6 +680,7 @@ case 'play': {
                 duration: mp4Response.data.result.metadata.duration,
                 views: mp4Response.data.result.metadata.views,
                 author: mp4Response.data.result.author.name,
+                url: mp4Response.data.result.url,
                 mp4: mp4Response.data.result.media,
                 mp3: mp3Response.data.result.media,
                 quality: {
@@ -823,7 +702,9 @@ case 'play': {
                     thumbnailUrl: videoInfo.thumbnail,
                     mediaType: 1,
                     previewType: 1,
-                    renderLargerThumbnail: true
+                    renderLargerThumbnail: true,
+                    mediaUrl: videoInfo.url,
+                    sourceUrl: videoInfo.Url
                     }
                 }
             }, { quoted: msg });
@@ -836,8 +717,8 @@ case 'play': {
     } catch (error) {
         console.error("Error pada fitur play:", error);
         
-        let errorMsg = 'Terjadi kesalahan saat memproses media.';
-        
+        let errorMsg = `Terjadi error: ${error.message}`;
+
         if (error.message === 'Video tidak ditemukan') {
             errorMsg = 'Video tidak ditemukan. Silakan coba kata kunci lain.';
         } else if (error.message === 'Gagal mendapatkan informasi video') {
@@ -880,7 +761,9 @@ case 'audio': case 'video': {
                         body: `Channel: ${videoInfo.author}`,
                         mediaType: 2,
                         thumbnailUrl: videoInfo.thumbnail,
-                        mediaUrl: videoInfo.mp4
+                        renderLargerThumbnail: true,
+                        mediaUrl: videoInfo.url,
+                        sourceUrl: videoInfo.Url
                     }
                 }
             }, { quoted: msg });
@@ -1041,38 +924,27 @@ case 'cancel': {
 }
 break;
 
-case 'test': case 'eval': {
-    if (!isCreator) return reply(nvdia, msg, '❌ Fitur ini hanya untuk owner bot!');
-    await handleTest(nvdia, msg, args.join(' '));
-}
-break;
-  
 case 'ai': case 'claude': {
         await handleAI(nvdia, msg, sender, args, prefixUsed, command);
 }
 break;
-
-case 'simi': {
-                await handleSimiSettings(nvdia, msg, sender, args, prefixUsed, command);
-}
+case 'blackbox': case 'bb': {
+                    if(!args.length) { nvdia.sendMessage(sender, { text: 'Halo, Mau Bertanya Apa?'}, { quoted: msg });
+                    return;
+                    }
+                    const query = args.join(' ');
+                    let anu = `https://api.siputzx.my.id/api/ai/blackboxai?content=${encodeURIComponent(query)}`;
+                    let res = await fetch(anu)
+                    let response = await res.json(); 
+                    let teks = `${response.data}`
+                    try {
+                        nvdia.sendMessage(sender, {text: teks}, {quoted: m});
+                    } catch (error) {
+                        console.log('Error pada aiBlackbox:', error);
+                        await reply(nvdia, msg, `Maaf, terjadi kesalahan: ${error.message}`);
+                    }
+                }
 break;
-
-case 'bb': case 'blackbox': {
-        if (!args.length) {
-            await reply(nvdia, msg, `Masukkan pertanyaan!\ncontoh:\n\n${prefixUsed + command} apa itu javascript`);
-            return;
-        }
-
-        const question = args.join(' ');
-        const options = {
-            model: 'blackbox', // Bisa diganti dengan model lain
-            temperature: 0.7
-        };
-
-        await handleBlackboxChat(nvdia, msg, question, options);
-    }
-break;
-
 case 'ig': case 'instagram': {
     const url = args.length > 0 ? args[0] : '';
     await handleIgram(nvdia, msg, url);
@@ -1085,13 +957,12 @@ case 'tt': case 'tiktok': {
 }
 break;
 case 'next': {
-    await handleContentNavigation(nvdia, msg, sender, 'next');
-}
+        await handleNext(nvdia, msg, sender, 'pinterest', 'igreels');
+    }
 break;
-
-case 'stop': {
-    await handleContentNavigation(nvdia, msg, sender, 'stop');
-}
+    case 'stop': {
+        await handleStop(nvdia, msg, sender, 'pinterest', 'igreels');
+    }
 break;
 case 'pinterest': case 'pin': {
     if (!args.length) {
@@ -1144,7 +1015,7 @@ case 'pinterest': case 'pin': {
         }));
 
         // Save images to state
-        setState(sender, 'pinterest_search', {
+        StateManager.setState(sender, 'pinterest_search', {
             images: images,
             currentIndex: 0,
             query: query
@@ -1240,8 +1111,8 @@ case 'igreels': case 'reels': {
             caption: `*[Instagram Reels]*\n\n` +
                     `> *Upload by:* ${reel.profile.username}\n` +
                     `> *Full Name:* ${reel.profile.full_name}\n` +
-                    `> *Duration:* ${reel.reels.duration}s\n\n` +
-                    `> *Caption:* ${reel.caption.text}\n\n` +
+                    `> *Duration:* ${reel.reels.duration}s\n` +
+                    `> *Caption:* ${reel.caption.text}\n` +
                     `> *Stats:*\n` +
                     `> 👁 Views: ${reel.statistics.play_count}\n` +
                     `> ❤️ Likes: ${reel.statistics.like_count}\n` +
@@ -1251,21 +1122,22 @@ case 'igreels': case 'reels': {
         }));
 
         // Save reels to state
-        setState(sender, 'igreels_search', {
+        StateManager.setState(sender, 'igreels_search', {
             reels: reels,
             currentIndex: 0,
-            query: query
+            query: query,
+            itemKey: 'reels'
         });
 
         // Send first video
         await nvdia.sendMessage(sender, {
             video: { url: reels[0].url },
-            caption: `${reels[0].caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Reels:* 1/${reels.length}\n\nKetik *.nextreel* untuk reels selanjutnya\nKetik *.stopreels* untuk mencari reels lain`,
+            caption: `${reels[0].caption}\n\n*Hasil pencarian untuk:* "${query}"\n*Reels:* 1/${reels.length}\n\nKetik *.next* untuk reels selanjutnya\nKetik *.stop* untuk berhenti`,
             gifPlayback: false
         }, { quoted: msg });
 
         // Delete loading message
-        await nvdia.sendMessage(sender, { 
+        await nvdia.sendMessage(sender, {
             delete: loadingMsg.key 
         });
 
@@ -1420,6 +1292,131 @@ case 'getcontact': {
     }
 }
 break;
+case 'servermc': case 'mc': {
+    if (!args.length) {
+        await nvdia.sendMessage(sender, { 
+            text: `Masukan Nama Ip Server Nya\nContoh\n${prefixUsed}servermc <ip> java\n${prefixUsed}servermc <ip> bedrock` 
+        }, { quoted: msg });
+        return;
+    }
+
+    try {
+        if (args[1]?.toLowerCase() === 'java') {
+            const response = await axios.get('https://api.mcsrvstat.us/3/' + args[0]);
+            const jav = response.data;
+
+            // Check if server is offline or data is invalid
+            if (!jav || jav.online === false) {
+                await reply(nvdia, msg, "Server sedang offline atau tidak ditemukan");
+                return;
+            }
+
+            let capt = `⏤͟͟͞͞╳── *[ sᴇʀᴠᴇʀᴍᴄ - ᴊᴀᴠᴀ ]* ── .々─ᯤ\n`;
+            capt += `│    =〆 ɪᴘ: ${jav.hostname || args[0]}\n`;
+            capt += `│    =〆 ᴘᴏʀᴛ: ${jav.port || '25565'}\n`;
+            capt += `│    =〆 ᴠᴇʀsɪ: ${jav.version || 'N/A'}\n`;
+            capt += `│    =〆 ᴏɴʟɪɴᴇ: ${jav.online ? 'Yes' : 'No'}\n`;
+            capt += `│    =〆 ᴘʟᴀʏᴇʀ: ${jav.players?.online || 0} \\ ${jav.players?.max || 0}\n`;
+            capt += `⏤͟͟͞͞╳────────── .✦`;
+
+            await reply(nvdia, msg, capt);
+
+        } else if (args[1]?.toLowerCase() === 'bedrock') {
+            const response = await axios.get('https://api.mcsrvstat.us/bedrock/3/' + args[0]);
+            const bed = response.data;
+
+            // Check if server is offline or data is invalid
+            if (!bed || bed.online === false) {
+                await reply(nvdia, msg, "Server sedang offline atau tidak ditemukan");
+                return;
+            }
+
+            let capt = `⏤͟͟͞͞╳── *[ sᴇʀᴠᴇʀᴍᴄ - ʙᴇᴅʀᴏᴄᴋ ]* ── .々─ᯤ\n`;
+            capt += `│    =〆 ɪᴘ: ${bed.hostname || args[0]}\n`;
+            capt += `│    =〆 ᴘᴏʀᴛ: ${bed.port || '19132'}\n`;
+            capt += `│    =〆 ᴠᴇʀsɪ: ${bed.version || 'N/A'}\n`;
+            capt += `│    =〆 ᴏɴʟɪɴᴇ: ${bed.online ? 'Yes' : 'No'}\n`;
+            capt += `│    =〆 ᴘʟᴀʏᴇʀ: ${bed.players?.online || 0} \\ ${bed.players?.max || 0}\n`;
+            capt += `⏤͟͟͞͞╳────────── .✦`;
+
+            await reply(nvdia, msg, capt);
+        } else {
+            await nvdia.sendMessage(sender, { 
+                text: `Masukan Nama Ip Server Nya\nContoh\n${prefixUsed}servermc <ip> java\n${prefixUsed}servermc <ip> bedrock` 
+            }, { quoted: msg });
+        }
+    } catch (error) {
+        console.error('Error in servermc:', error);
+        await reply(nvdia, msg, `Terjadi kesalahan saat mengecek server: ${error.message}`);
+    }
+}
+break;
+case 'toimg': {
+    try {
+        // Periksa apakah ada pesan yang di-reply
+        if (!m.quoted) {
+            await reply(nvdia, msg, 'Reply stiker yang ingin diubah menjadi gambar');
+            return;
+        }
+
+        // Periksa mime type dari pesan yang di-quoted
+        const mime = (m.quoted.msg || m.quoted).mimetype || '';
+        
+        // Periksa apakah mime type adalah stiker
+        if (!mime.includes('webp')) {
+            await reply(nvdia, msg, 'Pesan yang di-reply harus berupa stiker');
+            return;
+        }
+
+        // Download media
+        const buffer = await m.quoted.download();
+
+        // Kirim hasil konversi
+        await nvdia.sendMessage(sender, {
+            image: buffer,
+            caption: 'Nih hasil convert stikernya'
+        }, { quoted: msg });
+
+    } catch (error) {
+        console.error('Error in toimg:', error);
+        await reply(nvdia, msg, `Terjadi kesalahan saat mengkonversi stiker: ${error.message}`);
+    }
+}
+break;
+case 'togif': {
+    try {
+        // Periksa apakah ada pesan yang di-reply
+        if (!m.quoted) {
+            await reply(nvdia, msg, 'Reply stiker yang ingin diubah menjadi video gif');
+            return;
+        }
+
+        // Periksa mime type dari pesan yang di-quoted
+        const mime = (m.quoted.msg || m.quoted).mimetype || '';
+        
+        // Periksa apakah mime type adalah stiker
+        if (!mime.includes('webp')) {
+            await reply(nvdia, msg, 'Pesan yang di-reply harus berupa stiker');
+            return;
+        }
+
+        // Download sticker
+        const media = await m.quoted.download();
+
+        const url = await require('./App/tovideo').convert(media);
+
+        // Send as video
+        await nvdia.sendMessage(sender, {
+            video: { url: url },
+            caption: 'Ini dia'
+        }, { quoted: msg });
+
+    } catch (error) {
+        console.error('Error in tovideo:', error);
+        await reply(nvdia, msg, `Terjadi kesalahan saat mengkonversi ke video: ${error.message}`);
+    }
+}
+break;
 case 'gitpush': {
     if (!isCreator) return reply(nvdia, msg, 'Only bot owner can use this command.');
     
@@ -1442,7 +1439,7 @@ case 'gitpush': {
         // Send reaction
         await nvdia.sendMessage(msg.key.remoteJid, { 
             react: { 
-                text: "??", 
+                text: "⏱️", 
                 key: msg.key 
             } 
         });
@@ -1478,7 +1475,7 @@ case 'gitpush': {
         const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
         
         await nvdia.sendMessage(msg.key.remoteJid, {
-            text: `✅ File berhasil diupload ke GitHub!\n\n?? Path: ${filePath}\n?? Raw URL: ${rawUrl}`,
+            text: `✅ File berhasil diupload ke GitHub!\n\n> Path: ${filePath}\n> Raw URL: ${rawUrl}`,
             quoted: msg
         });
         
@@ -1496,9 +1493,246 @@ case 'gitpush': {
     }
 }
 break;
-// Inside the switch (command) block in case.js
+case 'getdata': {
+  const axioss = require('axios');
+  const cloudscraperr = require('cloudscraper');
+  const fetchh = require('node-fetch');
+  const { fetch: undiciFetch } = require('undici');
+    let gtd = `
+Usage: ${prefixUsed}getdata [options]
+`+ readmore + `
+Options:
+  --url <url>             Specify the URL to fetch.
+  --axios                 Use axios for the HTTP request.
+  --fetch                 Use fetch for the HTTP request.
+  --cloudscraper         Use cloudscraper for the HTTP request.
+  --undici               Use undici for the HTTP request.
+  --headers <json>        Set custom headers as a JSON object.
+  --timeout <milliseconds> Set a timeout for the request (default: 0).
+  --cookie <cookie>       Set the Cookie header.
+  --only-headers         Only return the headers of the response.
+  --get-buffer           Only return the response body as a buffer.
 
-case 'remini': case 'hdr': case 'hd': {
+Example:
+  ${prefixUsed}getdata https://example.com --fetch
+  ${prefixUsed}getdata --url https://example.com --headers '{"User-Agent": "MyApp"}' --timeout 5000 --cookie "sessionid=abc123"
+        `
+    if (!args.length) {
+        await nvdia.sendMessage(sender, { text: gtd}, { quoted: msg });
+        return;
+    }
+
+    try {
+        function parseArgs(args) {
+            const options = {
+                axios: false,
+                fetch: false,
+                cloudscraper: false,
+                undici: false,
+                headers: null,
+                timeout: 0,
+                cookie: '',
+                onlyHeaders: false,
+                getBufferOnly: false,
+                authorization: null,
+                url: null,
+            };
+
+            // Jika argumen pertama bukan flag, anggap sebagai URL
+            if (args[0] && !args[0].startsWith('--')) {
+                options.url = args[0];
+                args = args.slice(1); // Hapus URL dari array args
+            }
+
+            for (let i = 0; i < args.length; i++) {
+                switch (args[i]) {
+                    case '--headers':
+                        if (i + 1 < args.length) {
+                            options.headers = JSON.parse(args[i + 1]);
+                            i++;
+                        }
+                        break;
+                    case '--axios':
+                        options.axios = true;
+                        break;
+                    case '--fetch':
+                        options.fetch = true;
+                        break;
+                    case '--cloudscraper':
+                        options.cloudscraper = true;
+                        break;
+                    case '--undici':
+                        options.undici = true;
+                        break;
+                    case '--authorization':
+                        if (i + 1 < args.length) {
+                            options.authorization = args[i + 1];
+                            i++;
+                        }
+                        break;
+                    case '--timeout':
+                        if (i + 1 < args.length) {
+                            options.timeout = parseInt(args[i + 1]);
+                            i++;
+                        }
+                        break;
+                    case '--cookie':
+                        if (i + 1 < args.length) {
+                            options.cookie = args[i + 1];
+                            i++;
+                        }
+                        break;
+                    case '--only-headers':
+                        options.onlyHeaders = true;
+                        break;
+                    case '--get-buffer':
+                        options.getBufferOnly = true;
+                        break;
+                    case '--url':
+                        if (i + 1 < args.length) {
+                            options.url = args[i + 1];
+                            i++;
+                        }
+                        break;
+                }
+            }
+
+            if (!options.url) {
+                reply(nvdia, msg, 'URL tidak diisi.');
+                return null;
+            }
+
+            // Jika tidak ada method yang dipilih, gunakan fetch sebagai default
+            if (!options.axios && !options.fetch && !options.cloudscraper && !options.undici) {
+                options.fetch = true;
+            }
+
+            return options;
+        }
+
+        async function Fetcher(url, options = {}) {
+            const {
+                axios,
+                fetch,
+                cloudscraper,
+                undici,
+                headers = {},
+                timeout = 0,
+                cookie = '',
+                onlyHeaders = false,
+                getBufferOnly = false,
+            } = options;
+
+            if (timeout < 0) {
+                return reply(nvdia, msg, 'Timeout tidak boleh negatif.');
+            }
+
+            if (getBufferOnly && onlyHeaders) {
+                return reply(nvdia, msg, 'Hanya satu dari --get-buffer dan --only-headers yang bisa digunakan.');
+            }
+
+            const finalHeaders = { ...headers };
+
+            if (cookie) {
+                finalHeaders['Cookie'] = cookie;
+            }
+
+            if (options.authorization) {
+                finalHeaders['Authorization'] = options.authorization;
+            }
+
+            let response;
+
+            try {
+                if (axios) {
+                    response = await axioss.get(url, { headers: finalHeaders, timeout });
+                    return onlyHeaders ? response.headers : response.data;
+                } else if (fetch) {
+                    response = await fetchh(url, { 
+                        headers: finalHeaders,
+                        timeout: timeout || undefined
+                    });
+                    
+                    if (onlyHeaders) {
+                        const headers = {};
+                        for (const [key, value] of response.headers.entries()) {
+                            headers[key] = value;
+                        }
+                        return headers;
+                    }
+                    
+                    if (getBufferOnly) {
+                        return await response.buffer();
+                    }
+                    
+                    const text = await response.text();
+                    try {
+                        return JSON.parse(text);
+                    } catch {
+                        return text;
+                    }
+                } else if (cloudscraper) {
+                    response = await cloudscraperr.get(url, { 
+                        headers: finalHeaders,
+                        timeout
+                    });
+                    return response;
+                } else if (undici) {
+                    response = await undiciFetch(url, { 
+                        headers: finalHeaders,
+                        timeout: timeout || undefined
+                    });
+                    
+                    if (onlyHeaders) {
+                        return response.headers;
+                    }
+                    
+                    return await response.text();
+                }
+            } catch (error) {
+                throw new Error(`Fetch error: ${error.message}`);
+            }
+        }
+
+        const options = parseArgs(args);
+        if (!options) return;
+
+        // Log untuk debugging
+        console.log('Parsed options:', options);
+
+        const result = await Fetcher(options.url, options);
+        
+        // Handle berbagai tipe response
+        let responseText;
+        if (Buffer.isBuffer(result)) {
+            responseText = result.toString('utf-8');
+        } else if (typeof result === 'object') {
+            responseText = JSON.stringify(result, null, 2);
+        } else {
+            responseText = result;
+        }
+
+        await reply(nvdia, msg, responseText);
+
+        // Save and send the file
+        await fs.writeFileSync("./tes.html", responseText);
+
+        await nvdia.sendMessage(
+            sender,
+            {
+                document: fs.readFileSync("./tes.html"),
+                fileName: "tes.html",
+                mimetype: "text/html",
+            },
+            { quoted: msg }
+        );
+
+    } catch (error) {
+        await reply(nvdia, msg, `Error: ${error.message}`);
+    }
+}
+break;
+case 'remini': case 'hd': {
     if (!quoted || !quoted.msg) {
         await reply(nvdia, msg, `Reply/Kirim photo yang mau di jernihkan`);
         return;
@@ -1719,7 +1953,56 @@ case 'colorize': {
     await handlePxpic(nvdia, m, command);
 }
 break;
-case 'anime': {
+case 'waifu': {
+    try {
+        // Create tmp directory if it doesn't exist
+        const tmpDir = './tmp';
+        if (!fs.existsSync(tmpDir)) {
+            fs.mkdirSync(tmpDir, { recursive: true });
+        }
+
+        // Generate unique filename
+        const filename = `${tmpDir}/anime-${Date.now()}.jpg`;
+
+        // Fetch and download image
+        const response = await axios({
+            method: 'get',
+            url: 'https://archive-ui.tanakadomp.biz.id/asupan/anime',
+            responseType: 'arraybuffer'
+        });
+
+        // Save image to tmp folder
+        fs.writeFileSync(filename, Buffer.from(response.data, 'binary'));
+
+        // Send the image
+        await nvdia.sendMessage(sender, {
+            image: fs.readFileSync(filename),
+            caption: `Ini waifunya...`,
+        }, { quoted: msg });
+
+        // Delete temporary file
+        fs.unlinkSync(filename);
+
+    } catch (error) {
+        console.error("Error pada fitur anime:", error);
+        
+        let errorMsg = 'Terjadi kesalahan saat mengambil gambar anime.';
+        
+        if (error.response) {
+            if (error.response.status === 404) {
+                errorMsg = 'API tidak dapat diakses. Silakan coba lagi nanti.';
+            } else {
+                errorMsg = 'Gagal mengambil data dari server. Silakan coba lagi.';
+            }
+        } else if (error.code === 'ENOTFOUND') {
+            errorMsg = 'Gagal mengakses server. Periksa koneksi internet Anda.';
+        }
+        
+        await reply(nvdia, msg, errorMsg);
+    }
+}
+break;
+case 'anilist': {
     if (!args[0]) {
         await nvdia.sendMessage(sender, { 
             text: `Masukan judul anime!\ncontoh:\n\n${prefixUsed + command} one piece` 
@@ -1731,7 +2014,7 @@ case 'anime': {
 }
 break;
 
-case 'animeinfo': {
+case 'anilistinfo': {
     if (!args[0]) {
         await nvdia.sendMessage(sender, { 
             text: `Masukan link anime!\ncontoh:\n\n${prefixUsed + command} https://anilist.co/anime/...` 
@@ -1743,7 +2026,7 @@ case 'animeinfo': {
 }
 break;
 
-case 'animetop': {
+case 'anilisttop': {
     await handleAnilistPopular(nvdia, msg);
 }
 break;
